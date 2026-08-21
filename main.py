@@ -7,7 +7,6 @@ import json
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Zostawiamy główne kryptowaluty
 SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP"]
 TIMEFRAME = "4h"
 CACHE_FILE = "cache.json"
@@ -45,11 +44,9 @@ def main():
     
     for symbol in SYMBOLS:
         try:
-            # Pobieranie danych z giełdy
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=300)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            # Wskaźniki
             df['EMA_20'] = df['close'].ewm(span=20, adjust=False).mean()
             df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
             df['EMA_200'] = df['close'].ewm(span=200, adjust=False).mean()
@@ -59,20 +56,30 @@ def main():
             ts = int(df['timestamp'].iloc[-2])
             last_price = df['close'].iloc[-2]
             rsi = df['RSI'].iloc[-2]
-            vol_spike = df['volume'].iloc[-2] > (df['Vol_Avg'].iloc[-2] * 2) # Wolumen 2x wyższy
             
-            # Warunek przecięcia
-            is_crossover = (df['EMA_20'].iloc[-3] <= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] > df['EMA_50'].iloc[-2]) or \
-                           (df['EMA_20'].iloc[-3] >= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] < df['EMA_50'].iloc[-2])
+            vol_spike = df['volume'].iloc[-2] > (df['Vol_Avg'].iloc[-2] * 2)
+            is_extreme = rsi < 25
             
-            if is_crossover and cache.get(symbol) != ts:
-                direction = "🚀 W GÓRĘ" if df['EMA_20'].iloc[-2] > df['EMA_50'].iloc[-2] else "🔻 W DÓŁ"
+            crossover_up = df['EMA_20'].iloc[-3] <= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] > df['EMA_50'].iloc[-2]
+            crossover_down = df['EMA_20'].iloc[-3] >= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] < df['EMA_50'].iloc[-2]
+            
+            if (crossover_up or crossover_down or is_extreme) and cache.get(symbol) != ts:
+                
                 spike_msg = "🔥 POTWIERDZENIE WOLUMENEM" if vol_spike else "Wolumen neutralny"
                 
-                msg = (f"{direction} **ALERT {symbol} ({TIMEFRAME})**\n\n"
+                if crossover_up:
+                    direction = "🚀 W GÓRĘ (Sygnał EMA)"
+                elif crossover_down:
+                    direction = "🔻 W DÓŁ (Sygnał EMA)"
+                elif is_extreme:
+                    direction = "🚨 EXTREME DIP HUNTER (RSI < 25)"
+                
+                msg = (f"{direction} **{symbol} ({TIMEFRAME})**\n\n"
                        f"💰 Cena: *£{last_price:.4f}*\n"
                        f"📊 RSI: {rsi:.1f}\n"
-                       f"{spike_msg}\n\n"
+                       f"📈 *{spike_msg}*\n\n"
+                       f"EMA20: £{df['EMA_20'].iloc[-2]:.4f}\n"
+                       f"EMA50: £{df['EMA_50'].iloc[-2]:.4f}\n"
                        f"EMA200: £{df['EMA_200'].iloc[-2]:.4f}")
                 
                 send_telegram_alert(msg)
