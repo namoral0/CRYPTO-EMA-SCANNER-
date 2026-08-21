@@ -1,7 +1,6 @@
 import os
 import ccxt
 import pandas as pd
-import pandas_ta as ta
 import requests
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -26,9 +25,11 @@ def check_ema_crossover():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=300)
     
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['EMA_20'] = ta.ema(df['close'], length=20)
-    df['EMA_50'] = ta.ema(df['close'], length=50)
-    df['EMA_200'] = ta.ema(df['close'], length=200)
+    
+    # Natywne obliczanie EMA za pomocą pandas (.ewm)
+    df['EMA_20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
+    df['EMA_200'] = df['close'].ewm(span=200, adjust=False).mean()
 
     prev_ema20 = df['EMA_20'].iloc[-3]
     prev_ema50 = df['EMA_50'].iloc[-3]
@@ -46,6 +47,8 @@ def check_ema_crossover():
         status = "✅ **Zgodny z trendem spadkowym**" if last_price < curr_ema200 else "⚠️ **Korekta w trendzie wzrostowym**"
         msg = f"🔻 **ALERT XRP ({TIMEFRAME})**: EMA 20 przebiła EMA 50 OD GÓRY!\n\nCena: £{last_price:.4f}\nEMA 200: £{curr_ema200:.4f}\nStatus: {status}"
         send_telegram_alert(msg)
+    else:
+        print(f"Brak nowego sygnału. Ostatnia cena: £{last_price:.4f}")
 
 if __name__ == "__main__":
     check_ema_crossover()
