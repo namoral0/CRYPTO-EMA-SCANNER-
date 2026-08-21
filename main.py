@@ -6,91 +6,48 @@ import json
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
 SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP"]
-TIMEFRAME = "4h"
 CACHE_FILE = "cache.json"
 
-def send_telegram_alert(message: str):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
-
-def load_cache():
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r") as f: return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-def save_cache(cache):
-    try:
-        with open(CACHE_FILE, "w") as f: json.dump(cache, f)
-    except Exception as e:
-        print(f"Błąd zapisu cache: {e}")
-
-def calculate_rsi(series, window=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0).ewm(alpha=1/window, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/window, adjust=False).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+def send_telegram_alert(msg):
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    cache = load_cache()
-    exchange = ccxt.kraken()
+    cache = {}
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f: cache = json.load(f)
     
+    exchange = ccxt.kraken()
     for symbol in SYMBOLS:
         try:
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=300)
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            # Filtr 1D
+            df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
+            is_uptrend_1d = df_1d['close'].iloc[-1] > df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             
+            # Dane 4h
+            df = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             df['EMA_20'] = df['close'].ewm(span=20, adjust=False).mean()
             df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
-            df['EMA_200'] = df['close'].ewm(span=200, adjust=False).mean()
-            df['RSI'] = calculate_rsi(df['close'])
-            df['Vol_Avg'] = df['volume'].rolling(20).mean()
+            df['RSI'] = 100 - (100 / (1 + (df['close'].diff().clip(lower=0).ewm(alpha=1/14).mean() / (-df['close'].diff().clip(upper=0).ewm(alpha=1/14).mean()))))
             
-            ts = int(df['timestamp'].iloc[-2])
+            ts = int(df['ts'].iloc[-2])
             last_price = df['close'].iloc[-2]
-            rsi = df['RSI'].iloc[-2]
             
-            vol_spike = df['volume'].iloc[-2] > (df['Vol_Avg'].iloc[-2] * 2)
-            is_extreme = rsi < 25
+            crossover_up = (df['EMA_20'].iloc[-3] <= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] > df['EMA_50'].iloc[-2])
+            if crossover_up and not is_uptrend_1d: crossover_up = False
             
-            crossover_up = df['EMA_20'].iloc[-3] <= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] > df['EMA_50'].iloc[-2]
-            crossover_down = df['EMA_20'].iloc[-3] >= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] < df['EMA_50'].iloc[-2]
-            
-            if (crossover_up or crossover_down or is_extreme) and cache.get(symbol) != ts:
-                
-                spike_msg = "🔥 POTWIERDZENIE WOLUMENEM" if vol_spike else "Wolumen neutralny"
-                
-                if crossover_up:
-                    direction = "🚀 W GÓRĘ (Sygnał EMA)"
-                elif crossover_down:
-                    direction = "🔻 W DÓŁ (Sygnał EMA)"
-                elif is_extreme:
-                    direction = "🚨 EXTREME DIP HUNTER (RSI < 25)"
-                
-                msg = (f"{direction} **{symbol} ({TIMEFRAME})**\n\n"
+            if crossover_up and cache.get(symbol) != ts:
+                msg = (f"🚀 **SYGNAŁ EMA {symbol} (4h)**\n\n"
                        f"💰 Cena: *£{last_price:.4f}*\n"
-                       f"📊 RSI: {rsi:.1f}\n"
-                       f"📈 *{spike_msg}*\n\n"
-                       f"EMA20: £{df['EMA_20'].iloc[-2]:.4f}\n"
-                       f"EMA50: £{df['EMA_50'].iloc[-2]:.4f}\n"
-                       f"EMA200: £{df['EMA_200'].iloc[-2]:.4f}")
-                
+                       f"📈 Trend 1D: {'Wzrostowy' if is_uptrend_1d else 'Spadkowy'}\n"
+                       f"✅ EMA 20 przebiła EMA 50!")
                 send_telegram_alert(msg)
                 cache[symbol] = ts
-                save_cache(cache)
-                print(f"Wysłano alert dla {symbol}")
-            else:
-                print(f"{symbol}: Brak nowego sygnału.")
-                
-        except Exception as e:
-            print(f"Błąd dla {symbol}: {e}")
+        except: continue
+    
+    with open(CACHE_FILE, "w") as f: json.dump(cache, f)
 
 if __name__ == "__main__":
     main()
