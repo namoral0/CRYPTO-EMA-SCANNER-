@@ -1,27 +1,27 @@
 name: XRP EMA Scanner
 
 on:
-  schedule:
-    - cron: '0 */4 * * *'
   workflow_dispatch:
+
+env:
+  ACTIONS_NODE20_DEPRECATION_WARNING: "false"
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    steps:
-      - name: Pobranie kodu
-        uses: actions/checkout@v4
 
-      - name: Konfiguracja Pythona
-        uses: actions/setup-python@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.3.0
         with:
           python-version: '3.10'
 
-      - name: Instalacja bibliotek
-        run: pip install -r requirements.txt
-
-      - name: Uruchomienie skryptu
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py
+      # Wklej poniżej swoje dotychczasowe kroki uruchamiające skrypt (np. instalacja bibliotek i uruchomienie python):
+      # - name: Install dependencies
+      #   run: pip install -r requirements.txt
+      #
+      # - name: Run scanner
+      #   run: python main.py
