@@ -16,7 +16,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Rozszerzona lista obserwowanych aktywów (uwzględniająca tokenizację RWA i liderów L1)
+# Pełna lista z ONDO/GBP i pozostałymi monetami rozliczanymi w GBP
 SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "ONDO/GBP", "LINK/GBP", "SOL/GBP"]
 CACHE_FILE = "cache.json"
 
@@ -50,7 +50,7 @@ def main():
         except Exception: 
             pass
     
-    # Włączamy bezpieczne opóźnienia, by uniknąć blokady API giełdy Kraken
+    # Inicjalizacja Kraken Pro z zabezpieczeniem rate limit
     exchange = ccxt.kraken({'enableRateLimit': True})
     
     for symbol in SYMBOLS:
@@ -94,13 +94,13 @@ def main():
             is_in_cache = cache.get(symbol) == ts_closed
             print(f"[{symbol}] Cena: £{last_price:.4f} | RSI: {rsi_live} | Buy: {is_buy} | Sell: {is_sell} | W Cache: {is_in_cache}")
             
-            # Egzekucja alertów (tylko raz na nową zamkniętą świecę dla danego sygnału)
+            # Egzekucja alertów
             if (is_buy or is_sell) and not is_in_cache:
                 if is_sell:
                     rodzaj = "**🔴 KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ! 🔴**"
                     task_title = f"PILNE: SPRZEDAJ {symbol} (Zagrożenie/RSI)"
                 else:
-                    rodzaj = "**🟢 OKAZJA ZAKUPOWADA (RSI/EMA)**"
+                    rodzaj = "**🟢 OKAZJA ZAKUPOWA (RSI/EMA)**"
                     task_title = f"KUP {symbol} (Sygnał wejścia)"
                     
                 msg = (
@@ -126,4 +126,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                                  
+        
