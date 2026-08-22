@@ -16,7 +16,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP"]
+# Rozszerzona lista obserwowanych aktywów (uwzględniająca tokenizację RWA i liderów L1)
+SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "ONDO/GBP", "LINK/GBP", "SOL/GBP"]
 CACHE_FILE = "cache.json"
 
 def send_telegram_alert(msg):
@@ -24,7 +25,6 @@ def send_telegram_alert(msg):
         print("⚠️ Brak TELEGRAM_TOKEN lub TELEGRAM_CHAT_ID w środowisku!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    # Używamy Markdown, aby pogrubienia i formatowanie zadziałało
     response = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
     print(f"Telegram status: {response.status_code}")
 
@@ -50,14 +50,13 @@ def main():
         except Exception: 
             pass
     
-    # Włączamy bezpieczne opóźnienia, by uniknąć blokady API
+    # Włączamy bezpieczne opóźnienia, by uniknąć blokady API giełdy Kraken
     exchange = ccxt.kraken({'enableRateLimit': True})
     
     for symbol in SYMBOLS:
         try:
             # 1. Pobieranie danych 1D (Trend główny)
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            # Weryfikacja trendu względem EMA 200
             ema_200_1d = df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             is_uptrend_1d = df_1d['close'].iloc[-1] > ema_200_1d
             
@@ -78,7 +77,7 @@ def main():
             rsi_live = round(df['RSI'].iloc[-1], 1)
             last_price = df['close'].iloc[-1]
             
-            # Przecięcia EMA
+            # Przecięcia EMA na interwale 4H
             crossover_up = (df['EMA_20'].iloc[-3] <= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] > df['EMA_50'].iloc[-2])
             crossover_down = (df['EMA_20'].iloc[-3] >= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] < df['EMA_50'].iloc[-2])
             
@@ -86,22 +85,22 @@ def main():
             is_oversold = rsi_closed <= 30 or rsi_live <= 30
             is_overbought = rsi_closed >= 70 or rsi_live >= 70
             
-            # Warunek kupna: Wyprzedanie RSI LUB (przecięcie w górę + trend wzrostowy)
+            # Warunek kupna: Wyprzedanie RSI LUB (przecięcie EMA w górę + trend wzrostowy 1D)
             is_buy = is_oversold or (crossover_up and is_uptrend_1d)
             
-            # Warunek sprzedaży: RSI w strefie przegrzania LUB przecięcie w dół
+            # Warunek sprzedaży: Przegrzanie RSI LUB przecięcie EMA w dół
             is_sell = is_overbought or crossover_down
             
             is_in_cache = cache.get(symbol) == ts_closed
             print(f"[{symbol}] Cena: £{last_price:.4f} | RSI: {rsi_live} | Buy: {is_buy} | Sell: {is_sell} | W Cache: {is_in_cache}")
             
-            # Egzekucja alertów (tylko na nowych zamkniętych świecach)
+            # Egzekucja alertów (tylko raz na nową zamkniętą świecę dla danego sygnału)
             if (is_buy or is_sell) and not is_in_cache:
                 if is_sell:
                     rodzaj = "**🔴 KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ! 🔴**"
                     task_title = f"PILNE: SPRZEDAJ {symbol} (Zagrożenie/RSI)"
                 else:
-                    rodzaj = "**🟢 OKAZJA ZAKUPOWA (RSI/EMA)**"
+                    rodzaj = "**🟢 OKAZJA ZAKUPOWADA (RSI/EMA)**"
                     task_title = f"KUP {symbol} (Sygnał wejścia)"
                     
                 msg = (
@@ -116,17 +115,15 @@ def main():
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg)
                 
-                # Zapisujemy do cache
                 cache[symbol] = ts_closed
                 
         except Exception as e:
             print(f"❌ Błąd dla {symbol}: {e}")
             continue
     
-    # Aktualizacja pliku cache na sam koniec cyklu
     with open(CACHE_FILE, "w") as f: 
         json.dump(cache, f)
 
 if __name__ == "__main__":
     main()
-    
+                                  
