@@ -11,13 +11,13 @@ try:
 except ImportError:
     HAS_GOOGLE = False
 
-# Pobieranie zmiennych środowiskowych z Secrets (np. w GitHub Actions)
+# Pobieranie zmiennych środowiskowych z Secrets (w GitHub Actions)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Pełna lista z ONDO/GBP i pozostałymi monetami rozliczanymi w GBP
-SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "ONDO/GBP", "LINK/GBP", "SOL/GBP"]
+# Oficjalne symbole Kraken Pro (w tym oznaczona giełdowo para fiat)
+SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", "ONDO/GBP:GBP"]
 CACHE_FILE = "cache.json"
 
 def send_telegram_alert(msg):
@@ -50,7 +50,7 @@ def main():
         except Exception: 
             pass
     
-    # Inicjalizacja Kraken Pro z zabezpieczeniem rate limit
+    # Włączamy bezpieczne opóźnienia dla Kraken Pro, by uniknąć blokady API
     exchange = ccxt.kraken({'enableRateLimit': True})
     
     for symbol in SYMBOLS:
@@ -77,7 +77,7 @@ def main():
             rsi_live = round(df['RSI'].iloc[-1], 1)
             last_price = df['close'].iloc[-1]
             
-            # Przecięcia EMA na interwale 4H
+            # Przecięcia EMA
             crossover_up = (df['EMA_20'].iloc[-3] <= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] > df['EMA_50'].iloc[-2])
             crossover_down = (df['EMA_20'].iloc[-3] >= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] < df['EMA_50'].iloc[-2])
             
@@ -85,16 +85,12 @@ def main():
             is_oversold = rsi_closed <= 30 or rsi_live <= 30
             is_overbought = rsi_closed >= 70 or rsi_live >= 70
             
-            # Warunek kupna: Wyprzedanie RSI LUB (przecięcie EMA w górę + trend wzrostowy 1D)
             is_buy = is_oversold or (crossover_up and is_uptrend_1d)
-            
-            # Warunek sprzedaży: Przegrzanie RSI LUB przecięcie EMA w dół
             is_sell = is_overbought or crossover_down
             
             is_in_cache = cache.get(symbol) == ts_closed
             print(f"[{symbol}] Cena: £{last_price:.4f} | RSI: {rsi_live} | Buy: {is_buy} | Sell: {is_sell} | W Cache: {is_in_cache}")
             
-            # Egzekucja alertów
             if (is_buy or is_sell) and not is_in_cache:
                 if is_sell:
                     rodzaj = "**🔴 KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ! 🔴**"
@@ -114,7 +110,6 @@ def main():
                 
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg)
-                
                 cache[symbol] = ts_closed
                 
         except Exception as e:
@@ -126,4 +121,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
+                
