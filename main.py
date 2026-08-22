@@ -11,23 +11,16 @@ try:
 except ImportError:
     HAS_GOOGLE = False
 
-# Pobieranie zmiennych środowiskowych
+# Zmienne środowiskowe z GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Pełna lista aktywów w GBP
-SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", "ONDO/GBP", "SUI/GBP", "AAVE/GBP", "AVAX/GBP", "NEAR/GBP"]
+SYMBOLS = [
+    "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
+    "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/USD", "NEAR/USD"
+]
 CACHE_FILE = "cache.json"
-
-# Indywidualne profile progów RSI
-CUSTOM_SETTINGS = {
-    "BTC/GBP": {"rsi_buy": 30, "rsi_sell": 70},
-    "ETH/GBP": {"rsi_buy": 30, "rsi_sell": 70},
-    "XRP/GBP": {"rsi_buy": 30, "rsi_sell": 70},
-    # Altcoiny otrzymują szersze marginesy tolerancji (25/75)
-    "default": {"rsi_buy": 25, "rsi_sell": 75}
-}
 
 def send_telegram_alert(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -50,13 +43,6 @@ def add_to_tasks(title, notes):
     except Exception as e:
         print(f"❌ Błąd Tasks: {e}")
 
-def get_rsi(df, periods=14):
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0).ewm(alpha=1/periods, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/periods, adjust=False).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
 def main():
     cache = {}
     if os.path.exists(CACHE_FILE):
@@ -68,13 +54,16 @@ def main():
     
     exchange = ccxt.kraken({'enableRateLimit': True})
     
+    usd_gbp_rate = 0.78
+    try:
+        ticker_fx = exchange.fetch_ticker("GBP/USD")
+        if ticker_fx and ticker_fx.get('last'):
+            usd_gbp_rate = 1.0 / ticker_fx['last']
+    except Exception:
+        pass
+
     for symbol in SYMBOLS:
         try:
-            # Ustalanie progów dla konkretnej monety
-            settings = CUSTOM_SETTINGS.get(symbol, CUSTOM_SETTINGS["default"])
-            buy_threshold = settings["rsi_buy"]
-            sell_threshold = settings["rsi_sell"]
-
             # 1. Pobieranie danych 1D (Trend główny)
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             ema_200_1d = df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
@@ -84,56 +73,91 @@ def main():
             df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
             df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
-            df_4h['RSI'] = get_rsi(df_4h)
             
-            # 3. Pobieranie danych 15m dla dodatkowego kontekstu
+            delta_4h = df_4h['close'].diff()
+            gain_4h = delta_4h.where(delta_4h > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+            loss_4h = (-delta_4h.where(delta_4h < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+            rs_4h = gain_4h / loss_4h
+            df_4h['RSI'] = 100 - (100 / (1 + rs_4h))
+            
+            df_4h['BB_mid'] = df_4h['close'].rolling(window=20).mean()
+            df_4h['BB_std'] = df_4h['close'].rolling(window=20).std()
+            df_4h['BB_upper'] = df_4h['BB_mid'] + (df_4h['BB_std'] * 2)
+            df_4h['BB_lower'] = df_4h['BB_mid'] - (df_4h['BB_std'] * 2)
+            
+            # 3. Pobieranie danych 15m
             df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="15m", limit=100), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            df_15m['RSI'] = get_rsi(df_15m)
-            rsi_15m_live = round(df_15m['RSI'].iloc[-1], 1)
+            delta_15m = df_15m['close'].diff()
+            gain_15m = delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+            loss_15m = (-delta_15m.where(delta_15m < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+            rs_15m = gain_15m / loss_15m
+            df_15m['RSI'] = 100 - (100 / (1 + rs_15m))
 
             ts_closed = int(df_4h['ts'].iloc[-2])
-            rsi_closed = round(df_4h['RSI'].iloc[-2], 1)
-            rsi_live = round(df_4h['RSI'].iloc[-1], 1)
-            last_price = df_4h['close'].iloc[-1]
+            rsi_4h_live = round(df_4h['RSI'].iloc[-1], 1)
+            rsi_15m_live = round(df_15m['RSI'].iloc[-1], 1)
             
-            # Przecięcia EMA na interwale 4H
+            last_price = df_4h['close'].iloc[-1]
+            bb_upper = df_4h['BB_upper'].iloc[-1]
+            bb_lower = df_4h['BB_lower'].iloc[-1]
+            
+            if symbol.endswith("/USD"):
+                price_gbp = last_price * usd_gbp_rate
+                display_price = f"£{price_gbp:.4f} (${last_price:.4f})"
+                display_symbol = symbol.replace("/USD", "/GBP")
+            else:
+                display_price = f"£{last_price:.4f}"
+                display_symbol = symbol
+            
+            # --- INDYWIDUALNE PROGI DLA AKTYWÓW ---
+            # BTC i ETH mają sztywne, klasyczne parametry. Altcoiny mają szersze widełki podwyższonej zmienności.
+            if "BTC" in symbol or "ETH" in symbol:
+                buy_rsi_threshold = 30
+                sell_rsi_threshold = 70
+                confirm_15m_buy = 40
+                confirm_15m_sell = 60
+                profile_type = "Blue-chip (BTC/ETH)"
+            else:
+                buy_rsi_threshold = 25   # Pozwala altcoino głębiej spaść przed zakupem
+                sell_rsi_threshold = 75  # Pozwala altcoinowi urosnąć wyżej przed sprzedażą
+                confirm_15m_buy = 35
+                confirm_15m_sell = 65
+                profile_type = "Altcoin (Wysoka Beta)"
+
             crossover_up = (df_4h['EMA_20'].iloc[-3] <= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] > df_4h['EMA_50'].iloc[-2])
             crossover_down = (df_4h['EMA_20'].iloc[-3] >= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] < df_4h['EMA_50'].iloc[-2])
             
-            # Weryfikacja sygnałów zgodnie z indywidualnym progiem
-            is_oversold = rsi_closed <= buy_threshold or rsi_live <= buy_threshold
-            is_overbought = rsi_closed >= sell_threshold or rsi_live >= sell_threshold
+            is_oversold_4h = rsi_4h_live <= buy_rsi_threshold
+            is_overbought_4h = rsi_4h_live >= sell_rsi_threshold
             
-            is_buy = is_oversold or (crossover_up and is_uptrend_1d)
-            is_sell = is_overbought or crossover_down
+            price_above_upper_bb = last_price >= bb_upper
+            price_below_lower_bb = last_price <= bb_lower
+            
+            is_buy = (is_oversold_4h and rsi_15m_live <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and price_below_lower_bb)
+            is_sell = (is_overbought_4h and rsi_15m_live >= confirm_15m_sell) or crossover_down or (is_overbought_4h and price_above_upper_bb)
             
             is_in_cache = cache.get(symbol) == ts_closed
+            print(f"[{display_symbol} | {profile_type}] Cena: {display_price} | RSI 4H: {rsi_4h_live} (Próg S: {sell_rsi_threshold}) | RSI 15m: {rsi_15m_live} | Buy: {is_buy} | Sell: {is_sell}")
             
-            print(f"[{symbol}] Cena: £{last_price:.4f} | RSI 4H: {rsi_live} | RSI 15m: {rsi_15m_live} | Buy: {is_buy} | Sell: {is_sell} | Cache: {is_in_cache}")
-            
-            # Egzekucja alertów (integracja z zadaniami)
             if (is_buy or is_sell) and not is_in_cache:
                 if is_sell:
-                    # Krytyczna komunikacja
-                    rodzaj = "🚨 **🔴 KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ! 🔴** 🚨"
-                    task_title = f"🔴 PILNA OPERACJA: SPRZEDAJ {symbol} (ZAGROŻENIE/RSI) 🔴"
+                    rodzaj = "**🔴 KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ! 🔴**"
+                    task_title = f"PILNE: SPRZEDAJ {display_symbol} (Zagrożenie/RSI {sell_rsi_threshold})"
                 else:
-                    rodzaj = "**🟢 OKAZJA ZAKUPOWA (RSI/EMA)**"
-                    task_title = f"WYKONAJ ZAKUP: {symbol} (Sygnał wejścia)"
+                    rodzaj = "**🟢 OKAZJA ZAKUPOWA (RSI/EMA/BB)**"
+                    task_title = f"KUP {display_symbol} (Sygnał wejścia RSI {buy_rsi_threshold})"
                     
                 msg = (
                     f"{rodzaj}\n\n"
-                    f"🪙 **Moneta:** `{symbol}`\n"
-                    f"💰 **Cena:** `£{last_price:.4f}`\n"
-                    f"📊 **RSI 4H (bieżące):** `{rsi_live}`\n"
-                    f"⏱️ **RSI 15m (bieżące):** `{rsi_15m_live}`\n"
-                    f"🎯 **Wymagany próg RSI:** `{buy_threshold} (Kupno) / {sell_threshold} (Sprzedaż)`\n"
+                    f"🪙 **Moneta:** `{display_symbol}` ({profile_type})\n"
+                    f"💰 **Cena:** `{display_price}`\n"
+                    f"📊 **RSI 4H (Aktualny / Próg):** `{rsi_4h_live} / {sell_rsi_threshold if is_sell else buy_rsi_threshold}`\n"
+                    f"⏱️ **RSI (15m):** `{rsi_15m_live}`\n"
                     f"📈 **Trend 1D:** `{'Wzrostowy' if is_uptrend_1d else 'Spadkowy'}`"
                 )
                 
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg)
-                
                 cache[symbol] = ts_closed
                 
         except Exception as e:
@@ -145,4 +169,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+            
