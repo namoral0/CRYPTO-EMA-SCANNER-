@@ -16,8 +16,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Monety do monitorowania
-SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", "ONDO/GBP"]
+# Lista symboli (Dla ONDO używamy płynnej pary USD)
+SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", "ONDO/USD"]
 CACHE_FILE = "cache.json"
 
 def send_telegram_alert(msg):
@@ -41,16 +41,6 @@ def add_to_tasks(title, notes):
     except Exception as e:
         print(f"❌ Błąd Tasks: {e}")
 
-def get_actual_symbol(exchange, target_symbol):
-    """Automatycznie dopasowuje symbol do wewnętrznej nazewnictwa Krakena w CCXT."""
-    if target_symbol in exchange.markets:
-        return target_symbol
-    base, quote = target_symbol.split('/')
-    for m_symbol, market in exchange.markets.items():
-        if market.get('base') == base and market.get('quote') == quote and not market.get('spot') is False:
-            return m_symbol
-    return target_symbol
-
 def main():
     cache = {}
     if os.path.exists(CACHE_FILE):
@@ -62,13 +52,16 @@ def main():
     
     exchange = ccxt.kraken({'enableRateLimit': True})
     
+    # Pobieramy kurs USD/GBP do przeliczenia ceny ONDO
+    usd_gbp_rate = 0.78
     try:
-        exchange.load_markets()
-    except Exception as e:
-        print(f"⚠️ Błąd ładowania rynków z Krakena: {e}")
-    
-    for target_symbol in SYMBOLS:
-        symbol = get_actual_symbol(exchange, target_symbol)
+        ticker_fx = exchange.fetch_ticker("GBP/USD")
+        if ticker_fx and ticker_fx.get('last'):
+            usd_gbp_rate = 1.0 / ticker_fx['last']
+    except Exception:
+        pass
+
+    for symbol in SYMBOLS:
         try:
             # 1. Pobieranie danych 1D (Trend główny)
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
@@ -90,7 +83,16 @@ def main():
             ts_closed = int(df['ts'].iloc[-2])
             rsi_closed = round(df['RSI'].iloc[-2], 1)
             rsi_live = round(df['RSI'].iloc[-1], 1)
-            last_price = df['close'].iloc[-1]
+            
+            raw_price = df['close'].iloc[-1]
+            # Przeliczenie na GBP dla monet w USD
+            if symbol.endswith("/USD"):
+                price_gbp = raw_price * usd_gbp_rate
+                display_price = f"£{price_gbp:.4f} (${raw_price:.4f})"
+                display_symbol = symbol.replace("/USD", "/GBP")
+            else:
+                display_price = f"£{raw_price:.4f}"
+                display_symbol = symbol
             
             # Przecięcia EMA
             crossover_up = (df['EMA_20'].iloc[-3] <= df['EMA_50'].iloc[-3] and df['EMA_20'].iloc[-2] > df['EMA_50'].iloc[-2])
@@ -103,21 +105,21 @@ def main():
             is_buy = is_oversold or (crossover_up and is_uptrend_1d)
             is_sell = is_overbought or crossover_down
             
-            is_in_cache = cache.get(target_symbol) == ts_closed
-            print(f"[{target_symbol}] Cena: £{last_price:.4f} | RSI closed: {rsi_closed} | RSI live: {rsi_live} | Buy: {is_buy} | Sell: {is_sell} | W Cache: {is_in_cache}")
+            is_in_cache = cache.get(symbol) == ts_closed
+            print(f"[{display_symbol}] Cena: {display_price} | RSI closed: {rsi_closed} | RSI live: {rsi_live} | Buy: {is_buy} | Sell: {is_sell} | W Cache: {is_in_cache}")
             
             if (is_buy or is_sell) and not is_in_cache:
                 if is_sell:
                     rodzaj = "🔴 *KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ!* 🔴"
-                    task_title = f"PILNE: SPRZEDAJ {target_symbol} (Zagrożenie/RSI)"
+                    task_title = f"PILNE: SPRZEDAJ {display_symbol} (Zagrożenie/RSI)"
                 else:
                     rodzaj = "🟢 *OKAZJA ZAKUPOWA (RSI/EMA)*"
-                    task_title = f"KUP {target_symbol} (Sygnał wejścia)"
+                    task_title = f"KUP {display_symbol} (Sygnał wejścia)"
                     
                 msg = (
                     f"{rodzaj}\n\n"
-                    f"🪙 *Moneta:* `{target_symbol}` (4H)\n"
-                    f"💰 *Cena:* `£{last_price:.4f}`\n"
+                    f"🪙 *Moneta:* `{display_symbol}` (4H)\n"
+                    f"💰 *Cena:* `{display_price}`\n"
                     f"📊 *RSI (zamknięta świeca):* `{rsi_closed}`\n"
                     f"📊 *RSI (bieżąca świeca):* `{rsi_live}`\n"
                     f"📈 *Trend 1D:* `{'Wzrostowy' if is_uptrend_1d else 'Spadkowy'}`"
@@ -125,10 +127,10 @@ def main():
                 
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg)
-                cache[target_symbol] = ts_closed
+                cache[symbol] = ts_closed
                 
         except Exception as e:
-            print(f"❌ Błąd dla {target_symbol}: {e}")
+            print(f"❌ Błąd dla {symbol}: {e}")
             continue
     
     with open(CACHE_FILE, "w") as f: 
