@@ -11,12 +11,12 @@ try:
 except ImportError:
     HAS_GOOGLE = False
 
-# Pobieranie zmiennych środowiskowych z Secrets (w GitHub Actions)
+# Zmienne środowiskowe z GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Oficjalne symbole Kraken Pro (w tym oznaczona giełdowo para fiat)
+# Monety do monitorowania
 SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", "ONDO/GBP"]
 CACHE_FILE = "cache.json"
 
@@ -41,6 +41,16 @@ def add_to_tasks(title, notes):
     except Exception as e:
         print(f"❌ Błąd Tasks: {e}")
 
+def get_actual_symbol(exchange, target_symbol):
+    """Automatycznie dopasowuje symbol do wewnętrznej nazewnictwa Krakena w CCXT."""
+    if target_symbol in exchange.markets:
+        return target_symbol
+    base, quote = target_symbol.split('/')
+    for m_symbol, market in exchange.markets.items():
+        if market.get('base') == base and market.get('quote') == quote and not market.get('spot') is False:
+            return m_symbol
+    return target_symbol
+
 def main():
     cache = {}
     if os.path.exists(CACHE_FILE):
@@ -50,10 +60,15 @@ def main():
         except Exception: 
             pass
     
-    # Włączamy bezpieczne opóźnienia dla Kraken Pro, by uniknąć blokady API
     exchange = ccxt.kraken({'enableRateLimit': True})
     
-    for symbol in SYMBOLS:
+    try:
+        exchange.load_markets()
+    except Exception as e:
+        print(f"⚠️ Błąd ładowania rynków z Krakena: {e}")
+    
+    for target_symbol in SYMBOLS:
+        symbol = get_actual_symbol(exchange, target_symbol)
         try:
             # 1. Pobieranie danych 1D (Trend główny)
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
@@ -88,32 +103,32 @@ def main():
             is_buy = is_oversold or (crossover_up and is_uptrend_1d)
             is_sell = is_overbought or crossover_down
             
-            is_in_cache = cache.get(symbol) == ts_closed
-            print(f"[{symbol}] Cena: £{last_price:.4f} | RSI: {rsi_live} | Buy: {is_buy} | Sell: {is_sell} | W Cache: {is_in_cache}")
+            is_in_cache = cache.get(target_symbol) == ts_closed
+            print(f"[{target_symbol}] Cena: £{last_price:.4f} | RSI closed: {rsi_closed} | RSI live: {rsi_live} | Buy: {is_buy} | Sell: {is_sell} | W Cache: {is_in_cache}")
             
             if (is_buy or is_sell) and not is_in_cache:
                 if is_sell:
-                    rodzaj = "**🔴 KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ! 🔴**"
-                    task_title = f"PILNE: SPRZEDAJ {symbol} (Zagrożenie/RSI)"
+                    rodzaj = "🔴 *KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ!* 🔴"
+                    task_title = f"PILNE: SPRZEDAJ {target_symbol} (Zagrożenie/RSI)"
                 else:
-                    rodzaj = "**🟢 OKAZJA ZAKUPOWA (RSI/EMA)**"
-                    task_title = f"KUP {symbol} (Sygnał wejścia)"
+                    rodzaj = "🟢 *OKAZJA ZAKUPOWA (RSI/EMA)*"
+                    task_title = f"KUP {target_symbol} (Sygnał wejścia)"
                     
                 msg = (
                     f"{rodzaj}\n\n"
-                    f"🪙 **Moneta:** `{symbol}` (4H)\n"
-                    f"💰 **Cena:** `£{last_price:.4f}`\n"
-                    f"📊 **RSI (zamknięta świeca):** `{rsi_closed}`\n"
-                    f"📊 **RSI (bieżąca świeca):** `{rsi_live}`\n"
-                    f"📈 **Trend 1D:** `{'Wzrostowy' if is_uptrend_1d else 'Spadkowy'}`"
+                    f"🪙 *Moneta:* `{target_symbol}` (4H)\n"
+                    f"💰 *Cena:* `£{last_price:.4f}`\n"
+                    f"📊 *RSI (zamknięta świeca):* `{rsi_closed}`\n"
+                    f"📊 *RSI (bieżąca świeca):* `{rsi_live}`\n"
+                    f"📈 *Trend 1D:* `{'Wzrostowy' if is_uptrend_1d else 'Spadkowy'}`"
                 )
                 
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg)
-                cache[symbol] = ts_closed
+                cache[target_symbol] = ts_closed
                 
         except Exception as e:
-            print(f"❌ Błąd dla {symbol}: {e}")
+            print(f"❌ Błąd dla {target_symbol}: {e}")
             continue
     
     with open(CACHE_FILE, "w") as f: 
