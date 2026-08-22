@@ -19,17 +19,23 @@ SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP"]
 CACHE_FILE = "cache.json"
 
 def send_telegram_alert(msg):
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                      json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Brak TELEGRAM_TOKEN lub TELEGRAM_CHAT_ID w Secrets!")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    response = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
+    print(f"Telegram status: {response.status_code} | Odpowiedź: {response.text}")
 
 def add_to_tasks(title, notes):
-    if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS: return
+    if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS: 
+        print("⚠️ Pomijam Google Tasks (brak bibliotek lub credentials).")
+        return
     try:
         creds = Credentials.from_service_account_info(json.loads(GOOGLE_TASKS_CREDENTIALS), scopes=["https://www.googleapis.com/auth/tasks"])
         build('tasks', 'v1', credentials=creds).tasks().insert(tasklist='@default', body={'title': title, 'notes': notes}).execute()
+        print("✅ Pomyślnie dodano do Google Tasks")
     except Exception as e:
-        print(f"Błąd Tasks: {e}")
+        print(f"❌ Błąd Tasks: {e}")
 
 def main():
     cache = {}
@@ -54,7 +60,6 @@ def main():
             rs = gain / loss
             df['RSI'] = 100 - (100 / (1 + rs))
             
-            # Wartości dla ostatniej zamkniętej świecy (-2) oraz bieżącej (-1)
             ts_closed = int(df['ts'].iloc[-2])
             rsi_closed = round(df['RSI'].iloc[-2], 1)
             rsi_live = round(df['RSI'].iloc[-1], 1)
@@ -65,16 +70,15 @@ def main():
             
             if crossover_up and not is_uptrend_1d: crossover_up = False
             
-            # Reagujemy na wykupienie zarówno na zamkniętej świecy, jak i bieżącej (live)
             is_buy = crossover_up
             is_sell = crossover_down or rsi_closed >= 65 or rsi_live >= 65
             
-            # Raport w konsoli GitHuba dla pełnej przejrzystości
-            print(f"[{symbol}] Cena: £{last_price:.4f} | RSI 4h (zamknięta): {rsi_closed} | RSI 4h (live): {rsi_live} | Trend 1D: {'Wzrost' if is_uptrend_1d else 'Spadek'} | Sygnał: {is_buy or is_sell}")
+            is_in_cache = cache.get(symbol) == ts_closed
+            print(f"[{symbol}] Cena: £{last_price:.4f} | RSI closed: {rsi_closed} | RSI live: {rsi_live} | Sygnał: {is_buy or is_sell} | W Cache: {is_in_cache}")
             
-            if (is_buy or is_sell) and cache.get(symbol) != ts_closed:
+            if (is_buy or is_sell) and not is_in_cache:
                 if is_sell:
-                    rodzaj = "🔴 **KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ!** 🔴"
+                    rodzaj = "🔴 KRYTYCZNE ZAGROŻENIE: ROZWAŻ SPRZEDAŻ! 🔴"
                     task_title = f"PILNE: SPRZEDAJ? {symbol} (Zagrożenie/RSI)"
                 else:
                     rodzaj = "🟢 OKAZJA ZAKUPOWA"
@@ -90,15 +94,15 @@ def main():
                 )
                 
                 send_telegram_alert(msg)
-                add_to_tasks(task_title, msg.replace('**', ''))
+                add_to_tasks(task_title, msg)
                 cache[symbol] = ts_closed
                 
         except Exception as e:
-            print(f"Błąd dla {symbol}: {e}")
+            print(f"❌ Błąd dla {symbol}: {e}")
             continue
     
     with open(CACHE_FILE, "w") as f: json.dump(cache, f)
 
 if __name__ == "__main__":
     main()
-            
+    
