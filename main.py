@@ -16,8 +16,11 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Lista symboli (Dla ONDO używamy płynnej pary USD)
-SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", "ONDO/USD"]
+# Rozszerzona lista monet (SUI, AAVE, AVAX, NEAR + dotychczasowe)
+SYMBOLS = [
+    "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
+    "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/GBP", "NEAR/GBP"
+]
 CACHE_FILE = "cache.json"
 
 def send_telegram_alert(msg):
@@ -52,7 +55,7 @@ def main():
     
     exchange = ccxt.kraken({'enableRateLimit': True})
     
-    # Pobieramy kurs USD/GBP do przeliczenia ceny ONDO
+    # Pobieramy kurs USD/GBP do automatycznego przeliczenia cen dla monet w USD
     usd_gbp_rate = 0.78
     try:
         ticker_fx = exchange.fetch_ticker("GBP/USD")
@@ -85,7 +88,6 @@ def main():
             rsi_live = round(df['RSI'].iloc[-1], 1)
             
             raw_price = df['close'].iloc[-1]
-            # Przeliczenie na GBP dla monet w USD
             if symbol.endswith("/USD"):
                 price_gbp = raw_price * usd_gbp_rate
                 display_price = f"£{price_gbp:.4f} (${raw_price:.4f})"
