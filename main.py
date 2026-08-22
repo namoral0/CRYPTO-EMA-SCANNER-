@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
 # Oficjalne symbole Kraken Pro (w tym oznaczona giełdowo para fiat)
-SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", "ONDO/GBP:GBP"]
+SYMBOLS = ["XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", "ONDO/GBP"]
 CACHE_FILE = "cache.json"
 
 def send_telegram_alert(msg):
