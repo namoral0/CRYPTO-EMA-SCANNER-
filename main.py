@@ -17,7 +17,6 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Pełna, usystematyzowana lista monitorowanych aktywów
 SYMBOLS = [
     "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
     "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/USD", "NEAR/USD",
@@ -51,13 +50,18 @@ def main():
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r") as f: 
-                cache = json.load(f)
+                loaded_cache = json.load(f)
+                # Bezpieczna konwersja starego formatu (int) na nowy (dict)
+                for k, v in loaded_cache.items():
+                    if isinstance(v, int):
+                        cache[k] = {"ts": v, "signal": "NONE"}
+                    elif isinstance(v, dict):
+                        cache[k] = v
         except Exception: 
             pass
     
     exchange = ccxt.kraken({'enableRateLimit': True})
     
-    # Automatyczne pobranie kursu GBP/USD do przeliczeń cenowych
     usd_gbp_rate = 0.78
     try:
         ticker_fx = exchange.fetch_ticker("GBP/USD")
@@ -68,33 +72,29 @@ def main():
 
     for symbol in SYMBOLS:
         try:
-            # Odstęp czasowy chroniący przed przeciążeniem API giełdy (Rate Limit)
             time.sleep(1)
 
-            # 1. Pobieranie danych 1D (Trend główny - filtr makro)
+            # 1. Pobieranie danych 1D (Trend główny)
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             ema_200_1d = df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             is_uptrend_1d = df_1d['close'].iloc[-1] > ema_200_1d
             
-            # 2. Pobieranie danych 4H (Struktura i główny sygnał)
+            # 2. Pobieranie danych 4H
             df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
             df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
             
-            # RSI (14) dla 4H
             delta_4h = df_4h['close'].diff()
             gain_4h = delta_4h.where(delta_4h > 0, 0).ewm(alpha=1/14, adjust=False).mean()
             loss_4h = (-delta_4h.where(delta_4h < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
             rs_4h = gain_4h / loss_4h
             df_4h['RSI'] = 100 - (100 / (1 + rs_4h))
             
-            # Wstęgi Bollingera (BB) dla 4H
             df_4h['BB_mid'] = df_4h['close'].rolling(window=20).mean()
             df_4h['BB_std'] = df_4h['close'].rolling(window=20).std()
             df_4h['BB_upper'] = df_4h['BB_mid'] + (df_4h['BB_std'] * 2)
             df_4h['BB_lower'] = df_4h['BB_mid'] - (df_4h['BB_std'] * 2)
 
-            # ATR (Average True Range) do wykrywania anomalii cenowych / paniki
             high_low = df_4h['h'] - df_4h['l']
             high_close = (df_4h['h'] - df_4h['close'].shift()).abs()
             low_close = (df_4h['l'] - df_4h['close'].shift()).abs()
@@ -102,7 +102,7 @@ def main():
             df_4h['ATR'] = true_range.rolling(window=14).mean()
             df_4h['ATR_MA'] = df_4h['ATR'].rolling(window=20).mean()
             
-            # 3. Pobieranie danych 15m (Timing wejścia)
+            # 3. Pobieranie danych 15m
             df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="15m", limit=100), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             delta_15m = df_15m['close'].diff()
             gain_15m = delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean()
@@ -110,7 +110,6 @@ def main():
             rs_15m = gain_15m / loss_15m
             df_15m['RSI'] = 100 - (100 / (1 + rs_15m))
 
-            # Zmienne obliczeniowe dla bieżącej świecy
             ts_closed = int(df_4h['ts'].iloc[-2])
             rsi_4h_live = round(df_4h['RSI'].iloc[-1], 1)
             rsi_15m_live = round(df_15m['RSI'].iloc[-1], 1)
@@ -121,10 +120,8 @@ def main():
             current_atr = df_4h['ATR'].iloc[-1]
             avg_atr = df_4h['ATR_MA'].iloc[-1]
 
-            # Sprawdzenie, czy świeca nie jest anomalia (ochrona przed pułapką płynności)
             is_anomaly_candle = current_atr > (avg_atr * 2.5) if not pd.isna(avg_atr) else False
             
-            # Formatowanie wyświetlanej ceny w walucie bazowej (£ / $)
             if symbol.endswith("/USD"):
                 price_gbp = last_price * usd_gbp_rate
                 display_price = f"£{price_gbp:.4f} (${last_price:.4f})"
@@ -133,7 +130,6 @@ def main():
                 display_price = f"£{last_price:.4f}"
                 display_symbol = symbol
             
-            # Indywidualne progi dopasowane do klasy aktywa (Blue-chip vs Altcoin)
             if "BTC" in symbol or "ETH" in symbol:
                 buy_rsi_threshold = 30
                 sell_rsi_threshold = 70
@@ -147,7 +143,6 @@ def main():
                 confirm_15m_sell = 65
                 profile_type = "Altcoin"
 
-            # Logika przecięć EMA
             crossover_up = (df_4h['EMA_20'].iloc[-3] <= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] > df_4h['EMA_50'].iloc[-2])
             crossover_down = (df_4h['EMA_20'].iloc[-3] >= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] < df_4h['EMA_50'].iloc[-2])
             
@@ -157,7 +152,6 @@ def main():
             price_above_upper_bb = last_price >= bb_upper
             price_below_lower_bb = last_price <= bb_lower
             
-            # Ostateczne warunki sygnałów z uwzględnieniem filtra ATR
             is_buy = ((is_oversold_4h and rsi_15m_live <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and price_below_lower_bb)) and not is_anomaly_candle
             is_sell = ((is_overbought_4h and rsi_15m_live >= confirm_15m_sell) or crossover_down or (is_overbought_4h and price_above_upper_bb)) and not is_anomaly_candle
 
@@ -167,7 +161,6 @@ def main():
             elif is_sell:
                 current_signal_type = "SELL"
 
-            # Inteligentny cache stanowy (reaguje na zmianę stanu sygnału lub nową świecę)
             cached_data = cache.get(symbol, {})
             cached_ts = cached_data.get("ts")
             cached_signal = cached_data.get("signal")
@@ -197,7 +190,6 @@ def main():
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg)
                 
-                # Zapis nowego stanu w cache
                 cache[symbol] = {
                     "ts": ts_closed,
                     "signal": current_signal_type
@@ -212,4 +204,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
+            
