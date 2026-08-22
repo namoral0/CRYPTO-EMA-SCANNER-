@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from google.oauth2.service_account import Credentials
@@ -70,18 +70,16 @@ def main():
     except Exception:
         pass
 
-    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     digest_lines = []
 
     for symbol in SYMBOLS:
         try:
             time.sleep(1)
 
-            # Określenie pary BTC dla danej waluty bazowej (do obliczania siły względnej RS)
             quote_currency = symbol.split('/')[1]
             btc_symbol = f"BTC/{quote_currency}"
 
-            # 1. Pobieranie danych 1D (Trend główny + BTC dla RS 1D)
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             ema_200_1d = df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             is_uptrend_1d = df_1d['close'].iloc[-1] > ema_200_1d
@@ -91,12 +89,10 @@ def main():
             else:
                 df_1d_btc = pd.DataFrame(exchange.fetch_ohlcv(btc_symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
 
-            # RS 1D (Relacja ceny do BTC)
             rs_1d = df_1d['close'] / df_1d_btc['close']
             rs_1d_ema = rs_1d.ewm(span=20, adjust=False).mean()
             is_strong_vs_btc_1d = (rs_1d.iloc[-2] >= rs_1d_ema.iloc[-2]) if symbol != btc_symbol else True
             
-            # 2. Pobieranie danych 4H (Struktura, Wstęgi, ATR, Wolumen + BTC dla RS 4H)
             df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
             df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
@@ -128,12 +124,10 @@ def main():
             else:
                 df_4h_btc = pd.DataFrame(exchange.fetch_ohlcv(btc_symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
 
-            # Wskaźnik Siły Względnej (RS) do BTC na 4H
             df_4h['RS'] = df_4h['close'] / df_4h_btc['close']
             df_4h['RS_EMA'] = df_4h['RS'].ewm(span=20, adjust=False).mean()
             is_strong_vs_btc_4h = (df_4h['RS'].iloc[-2] >= df_4h['RS_EMA'].iloc[-2]) if symbol != btc_symbol else True
 
-            # 3. Pobieranie danych 15m (Timing)
             df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="15m", limit=100), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             delta_15m = df_15m['close'].diff()
             gain_15m = delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean()
@@ -141,7 +135,6 @@ def main():
             rs_15m = gain_15m / loss_15m
             df_15m['RSI'] = 100 - (100 / (1 + rs_15m))
 
-            # --- WERYFIKACJA NA ZAMKNIĘTEJ ŚWIECY (iloc[-2]) ---
             ts_closed = int(df_4h['ts'].iloc[-2])
             rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
             rsi_15m_live = round(df_15m['RSI'].iloc[-1], 1)
@@ -167,7 +160,6 @@ def main():
                 display_price = f"£{close_closed:.4f}"
                 display_symbol = symbol
             
-            # Bazowe progi
             if "BTC" in symbol or "ETH" in symbol:
                 base_buy, base_sell = 30, 70
                 confirm_15m_buy, confirm_15m_sell = 40, 60
@@ -177,7 +169,6 @@ def main():
                 confirm_15m_buy, confirm_15m_sell = 35, 65
                 profile_type = "Altcoin"
 
-            # Dynamiczne progi oparte o zmienność (BBW)
             volatility_multiplier = (bbw_closed / bbw_avg) if (not pd.isna(bbw_avg) and bbw_avg > 0) else 1.0
             if volatility_multiplier > 1.3:
                 buy_rsi_threshold = max(20, base_buy - 3)
@@ -189,7 +180,6 @@ def main():
                 buy_rsi_threshold = base_buy
                 sell_rsi_threshold = base_sell
 
-            # Przecięcia EMA liczone strictly na zamkniętych świecach (`iloc[-3]` i `iloc[-2]`)
             crossover_up = (df_4h['EMA_20'].iloc[-3] <= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] > df_4h['EMA_50'].iloc[-2])
             crossover_down = (df_4h['EMA_20'].iloc[-3] >= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] < df_4h['EMA_50'].iloc[-2])
             
@@ -199,7 +189,6 @@ def main():
             price_above_upper_bb = close_closed >= bb_upper_closed
             price_below_lower_bb = close_closed <= bb_lower_closed
             
-            # Warunki sygnałów: uwzględniają zamkniętą świecę, brak anomalii ATR, skok wolumenu ORAZ siłę względną do BTC
             is_buy = (
                 ((is_oversold_4h and rsi_15m_live <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and price_below_lower_bb)) 
                 and not is_anomaly_candle 
@@ -261,7 +250,6 @@ def main():
             print(f"❌ Błąd dla {symbol}: {e}")
             continue
 
-    # Wysyłka dziennego podsumowania (Digest)
     any_symbol_cache = list(cache.values())[0] if cache else {}
     if any_symbol_cache.get("last_digest_date") != today_str:
         digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (DIGEST + RS)** 📋\n\n" + "\n".join(digest_lines)
