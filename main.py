@@ -16,10 +16,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Rozszerzona lista monet (SUI, AAVE, AVAX, NEAR + dotychczasowe)
+# Lista symboli (AVAX i NEAR ustawione na płynne pary USD z przeliczeniem na GBP)
 SYMBOLS = [
     "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
-    "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/GBP", "NEAR/GBP"
+    "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/USD", "NEAR/USD"
 ]
 CACHE_FILE = "cache.json"
 
@@ -55,7 +55,7 @@ def main():
     
     exchange = ccxt.kraken({'enableRateLimit': True})
     
-    # Pobieramy kurs USD/GBP do automatycznego przeliczenia cen dla monet w USD
+    # Kurs przeliczeniowy USD -> GBP
     usd_gbp_rate = 0.78
     try:
         ticker_fx = exchange.fetch_ticker("GBP/USD")
@@ -140,4 +140,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+        
