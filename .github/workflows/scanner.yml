@@ -2,30 +2,29 @@ name: Krypto Skaner 24/7
 
 on:
   schedule:
-    # Uruchamia się 5 minut po każdych pełnych 4 godzinach (24 godziny na dobę, 7 dni w tygodniu)
-    - cron: '5 */4 * * *'
-  workflow_dispatch: # Pozwala ręcznie uruchomić skrypt w dowolnym momencie z poziomu GitHuba
+    # Skanowanie co 15 minut, 24/7
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Umożliwia także ręczne uruchomienie przyciskiem w GitHub Actions
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Konieczne, aby GitHub mógł zapisać zaktualizowany plik cache.json
+      contents: write # Uprawnienie do zapisywania zmian w cache.json
 
     steps:
-      - name: Pobranie kodu
+      - name: Pobranie kodu z repozytorium
         uses: actions/checkout@v4
 
       - name: Konfiguracja Pythona
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Instalacja bibliotek
         run: |
           python -m pip install --upgrade pip
-          # Wszystkie paczki wymienione explicite, by zapobiec błędom brakujących bibliotek
-          pip install ccxt pandas requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+          pip install ccxt pandas requests google-api-python-client google-auth
 
       - name: Uruchomienie skryptu
         env:
@@ -36,9 +35,9 @@ jobs:
 
       - name: Zapisanie stanu pamięci (cache.json)
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add cache.json
-          # Commit i push tylko wtedy, gdy plik cache.json faktycznie się zmienił (znalazł nowy sygnał)
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-zapis stanu powiadomień krypto [skip ci]" && git push)
+          git commit -m "Aktualizacja cache.json [skip ci]" || exit 0
+          git push
           
