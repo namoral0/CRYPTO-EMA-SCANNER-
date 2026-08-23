@@ -17,6 +17,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
+CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
     "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
     "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/USD", "NEAR/USD",
@@ -66,7 +67,8 @@ def main():
 
     for symbol in SYMBOLS:
         try:
-            time.sleep(1.5)
+            time.sleep(1.2)
+            is_core = symbol in CORE_CRYPTO
             quote_currency = symbol.split('/')[1]
             btc_symbol = f"BTC/{quote_currency}"
 
@@ -81,16 +83,20 @@ def main():
             df_4h_btc = btc_data_cache[btc_symbol]["4h"]
 
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
+            if len(df_1d) < 200: continue
+            
             ema_200_1d = df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             is_uptrend_1d = df_1d['close'].iloc[-1] > ema_200_1d
 
             df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
+            if len(df_4h) < 100: continue
+            
             df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
             df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
             
             delta_4h = df_4h['close'].diff()
             gain_4h = delta_4h.where(delta_4h > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-            loss_4h = (-delta_4h.where(delta_4h < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+            loss_4h = (-delta_4h.where(delta_4h < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
             df_4h['RSI'] = 100 - (100 / (1 + (gain_4h / loss_4h)))
             
             df_4h['BB_mid'] = df_4h['close'].rolling(window=20).mean()
@@ -105,13 +111,20 @@ def main():
             df_4h['ATR_MA'] = df_4h['ATR'].rolling(window=20).mean()
             df_4h['Vol_MA'] = df_4h['v'].rolling(window=20).mean()
 
-            df_4h['RS'] = df_4h['close'] / df_4h_btc['close']
-            df_4h['RS_EMA'] = df_4h['RS'].ewm(span=20, adjust=False).mean()
-            is_strong_vs_btc_4h = (df_4h['RS'].iloc[-2] >= df_4h['RS_EMA'].iloc[-2]) if symbol != btc_symbol else True
+            is_strong_vs_btc_4h = True
+            if symbol != btc_symbol:
+                merged_rs = pd.merge(df_4h[['ts', 'close']], df_4h_btc[['ts', 'close']], on='ts', suffixes=('', '_btc'))
+                if len(merged_rs) > 20:
+                    rs_series = merged_rs['close'] / (merged_rs['close_btc'] + 1e-10)
+                    rs_ema = rs_series.ewm(span=20, adjust=False).mean()
+                    is_strong_vs_btc_4h = rs_series.iloc[-2] >= rs_ema.iloc[-2]
 
             df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="15m", limit=100), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
+            if len(df_15m) < 20: continue
             delta_15m = df_15m['close'].diff()
-            df_15m['RSI'] = 100 - (100 / (1 + (delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean() / (-delta_15m.where(delta_15m < 0, 0)).ewm(alpha=1/14, adjust=False).mean())))
+            gain_15m = delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+            loss_15m = (-delta_15m.where(delta_15m < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
+            df_15m['RSI'] = 100 - (100 / (1 + (gain_15m / loss_15m)))
 
             ts_closed = int(df_4h['ts'].iloc[-2])
             rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
@@ -128,24 +141,24 @@ def main():
             avg_vol = df_4h['Vol_MA'].iloc[-2]
             vol_multiplier = current_vol / avg_vol if not pd.isna(avg_vol) and avg_vol > 0 else 0
             is_volume_spike = vol_multiplier > 1.4
-            is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) else False
+            is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
             
             if symbol.endswith("/USD"):
-                display_price = f"£{close_closed * usd_gbp_rate:.4f} (${close_closed:.4f})"
+                display_price = f"${close_closed:.4f} (£{close_closed * usd_gbp_rate:.4f})"
                 display_symbol = symbol.replace("/USD", "/GBP")
             else:
                 display_price = f"£{close_closed:.4f}"
                 display_symbol = symbol
             
-            base_buy, base_sell = (30, 70) if "BTC" in symbol or "ETH" in symbol else (25, 75)
-            confirm_15m_buy, confirm_15m_sell = (40, 60) if "BTC" in symbol or "ETH" in symbol else (35, 65)
+            base_buy, base_sell = (30, 70) if is_core else (25, 75)
+            confirm_15m_buy, confirm_15m_sell = (40, 60) if is_core else (35, 65)
 
             volatility_multiplier = (bbw_closed / bbw_avg) if (not pd.isna(bbw_avg) and bbw_avg > 0) else 1.0
             buy_rsi_threshold = max(20, base_buy - 3) if volatility_multiplier > 1.3 else (min(35, base_buy + 3) if volatility_multiplier < 0.7 else base_buy)
             sell_rsi_threshold = min(80, base_sell + 3) if volatility_multiplier > 1.3 else (max(65, base_sell - 3) if volatility_multiplier < 0.7 else base_sell)
 
             if is_uptrend_1d:
-                sell_rsi_threshold = max(sell_rsi_threshold, 75 if ("BTC" in symbol or "ETH" in symbol) else 80)
+                sell_rsi_threshold = max(sell_rsi_threshold, 75 if is_core else 80)
 
             crossover_up = (df_4h['EMA_20'].iloc[-3] <= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] > df_4h['EMA_50'].iloc[-2])
             crossover_down = (df_4h['EMA_20'].iloc[-3] >= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] < df_4h['EMA_50'].iloc[-2])
@@ -158,9 +171,12 @@ def main():
 
             current_signal_type = "NONE"
             if is_base_buy:
-                current_signal_type = "BUY_MEGA" if (is_volume_spike and is_strong_vs_btc_4h and is_uptrend_1d) else "BUY_SWING"
+                current_signal_type = "BUY_MEGA" if (is_volume_spike or is_core) else "BUY_SWING"
             elif is_base_sell:
-                current_signal_type = "SELL_TAKE_PROFIT" if is_uptrend_1d else "SELL_EVACUATION"
+                if is_core:
+                    current_signal_type = "SELL_TAKE_PROFIT"
+                else:
+                    current_signal_type = "SELL_TAKE_PROFIT" if is_uptrend_1d else "SELL_EVACUATION"
 
             digest_lines.append(f"• `{display_symbol}`: RSI `{rsi_4h_closed}` | Stan: `{current_signal_type}`")
 
@@ -169,16 +185,15 @@ def main():
             
             if should_alert:
                 if current_signal_type == "BUY_MEGA":
-                    rodzaj = "🟢 **MEGA OKAZJA ZAKUPOWA (HOSSA + RS + WOLUMEN)** 🟢"
+                    rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)** 🟢"
                     task_title = f"MEGA OKAZJA: KUP {display_symbol}"
                     msg = (
                         f"{rodzaj}\n\n"
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
-                        f"💪 **Siła Wzgl. (BTC):** `Lider Rynku (Outperformer) 🟢`\n"
-                        f"📈 **Wolumen:** `Skok Obrotów (>1.4x) 🔥`\n"
-                        f"📈 **Trend 1D:** `Wzrostowy 🟢`"
+                        f"💪 **Ranga:** `{'FILAR CORE 💎' if is_core else 'Satelita 🚀'}`\n"
+                        f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}`"
                     )
                 elif current_signal_type == "BUY_SWING":
                     rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)** 🟡"
@@ -189,7 +204,6 @@ def main():
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
                         f"💪 **Siła Wzgl. (BTC):** `{'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}`\n"
-                        f"📈 **Wolumen:** `{'Skok (>1.4x) 🔥' if is_volume_spike else 'Wysychający/Stabilny 🧊'}`\n"
                         f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}`"
                     )
                 elif current_signal_type == "SELL_TAKE_PROFIT":
@@ -200,18 +214,17 @@ def main():
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {sell_rsi_threshold}`\n"
-                        f"📈 **Trend 1D:** `Wzrostowy 🟢`"
+                        f"📈 **Typ:** `{'Rebalancing Core 💎' if is_core else 'Take Profit Satelita 🚀'}`"
                     )
                 else: 
-                    rodzaj = "🔴 **KRYTYCZNA EWAKUACJA: SPRZEDAŻ W TRENDZIE SPADKOWYM!** 🔴"
+                    rodzaj = "KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
                     task_title = f"PILNE: SPRZEDAJ {display_symbol} (Trend spadkowy)"
-                    # Zgodnie z wytycznymi - komunikaty krytyczne w pełni pogrubione i CAPS LOCKIEM
                     msg = (
-                        f"{rodzaj}\n\n"
-                        f"🪙 **MONETA:** `{display_symbol.upper()}`\n"
-                        f"💰 **CENA:** **{display_price.upper()}**\n"
-                        f"📊 **RSI 4H:** **{rsi_4h_closed}** (PRÓG: {sell_rsi_threshold})\n"
-                        f"📈 **TREND 1D:** `SPADKOWY 🔴`"
+                        f"🔴 **{rodzaj}** 🔴\n\n"
+                        f"🔴 **MONETA: {display_symbol.upper()}** 🔴\n"
+                        f"🔴 **CENA: {display_price.upper()}** 🔴\n"
+                        f"🔴 **RSI 4H: {rsi_4h_closed} (PRÓG: {sell_rsi_threshold})** 🔴\n"
+                        f"🔴 **TREND 1D: SPADKOWY** 🔴"
                     )
 
                 send_telegram_alert(msg)
@@ -232,4 +245,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                    
