@@ -83,13 +83,15 @@ def main():
             df_4h_btc = btc_data_cache[btc_symbol]["4h"]
 
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            if len(df_1d) < 200: continue
+            if len(df_1d) < 30: continue  
             
             ema_200_1d = df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             is_uptrend_1d = df_1d['close'].iloc[-1] > ema_200_1d
 
             df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             if len(df_4h) < 100: continue
+            
+            ts_closed = int(df_4h['ts'].iloc[-2])
             
             df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
             df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
@@ -115,9 +117,14 @@ def main():
             if symbol != btc_symbol:
                 merged_rs = pd.merge(df_4h[['ts', 'close']], df_4h_btc[['ts', 'close']], on='ts', suffixes=('', '_btc'))
                 if len(merged_rs) > 20:
+                    merged_rs.set_index('ts', inplace=True)
                     rs_series = merged_rs['close'] / (merged_rs['close_btc'] + 1e-10)
                     rs_ema = rs_series.ewm(span=20, adjust=False).mean()
-                    is_strong_vs_btc_4h = rs_series.iloc[-2] >= rs_ema.iloc[-2]
+                    
+                    if ts_closed in merged_rs.index:
+                        is_strong_vs_btc_4h = bool(rs_series.loc[ts_closed] >= rs_ema.loc[ts_closed])
+                    else:
+                        is_strong_vs_btc_4h = bool(rs_series.iloc[-1] >= rs_ema.iloc[-1])
 
             df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="15m", limit=100), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             if len(df_15m) < 20: continue
@@ -126,7 +133,6 @@ def main():
             loss_15m = (-delta_15m.where(delta_15m < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
             df_15m['RSI'] = 100 - (100 / (1 + (gain_15m / loss_15m)))
 
-            ts_closed = int(df_4h['ts'].iloc[-2])
             rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
             rsi_15m_live = round(df_15m['RSI'].iloc[-1], 1)
             
@@ -218,7 +224,7 @@ def main():
                     )
                 else: 
                     rodzaj = "KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
-                    task_title = f"PILNE: SPRZEDAJ {display_symbol} (Trend spadkowy)"
+                    task_title = f"🔴 PILNE: SPRZEDAJ {display_symbol.upper()} (TREND SPADKOWY) 🔴"
                     msg = (
                         f"🔴 **{rodzaj}** 🔴\n\n"
                         f"🔴 **MONETA: {display_symbol.upper()}** 🔴\n"
@@ -230,19 +236,22 @@ def main():
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg.replace('**', ''))
 
-            cache[symbol] = {"ts": ts_closed, "signal": current_signal_type, "last_digest_date": today_str if cached_data.get("last_digest_date", "") != today_str else cached_data.get("last_digest_date", "")}
+            cache[symbol] = {"ts": ts_closed, "signal": current_signal_type, "last_digest_date": cached_data.get("last_digest_date", "")}
         except Exception as e:
             print(f"❌ Błąd dla {symbol}: {e}")
 
-    any_cache = list(cache.values())[0] if cache else {}
-    if any_cache.get("last_digest_date") != today_str:
-        digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)** 📋\n\n" + "\n".join(digest_lines)
-        send_telegram_alert(digest_msg)
-        add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg)
-        for sym in cache: cache[sym]["last_digest_date"] = today_str
+    if cache:
+        any_cache_date = list(cache.values())[0].get("last_digest_date", "")
+        if any_cache_date != today_str and digest_lines:
+            digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)** 📋\n\n" + "\n".join(digest_lines)
+            send_telegram_alert(digest_msg)
+            add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg)
+            
+            for sym in cache: 
+                cache[sym]["last_digest_date"] = today_str
 
     with open(CACHE_FILE, "w") as f: json.dump(cache, f)
 
 if __name__ == "__main__":
     main()
-                    
+            
