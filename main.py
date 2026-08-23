@@ -144,6 +144,9 @@ def main():
             buy_rsi_threshold = max(20, base_buy - 3) if volatility_multiplier > 1.3 else (min(35, base_buy + 3) if volatility_multiplier < 0.7 else base_buy)
             sell_rsi_threshold = min(80, base_sell + 3) if volatility_multiplier > 1.3 else (max(65, base_sell - 3) if volatility_multiplier < 0.7 else base_sell)
 
+            if is_uptrend_1d:
+                sell_rsi_threshold = max(sell_rsi_threshold, 75 if ("BTC" in symbol or "ETH" in symbol) else 80)
+
             crossover_up = (df_4h['EMA_20'].iloc[-3] <= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] > df_4h['EMA_50'].iloc[-2])
             crossover_down = (df_4h['EMA_20'].iloc[-3] >= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] < df_4h['EMA_50'].iloc[-2])
             
@@ -155,9 +158,9 @@ def main():
 
             current_signal_type = "NONE"
             if is_base_buy:
-                current_signal_type = "BUY_A" if is_volume_spike and is_strong_vs_btc_4h else "BUY_B"
+                current_signal_type = "BUY_MEGA" if (is_volume_spike and is_strong_vs_btc_4h and is_uptrend_1d) else "BUY_SWING"
             elif is_base_sell:
-                current_signal_type = "SELL"
+                current_signal_type = "SELL_TAKE_PROFIT" if is_uptrend_1d else "SELL_EVACUATION"
 
             digest_lines.append(f"• `{display_symbol}`: RSI `{rsi_4h_closed}` | Stan: `{current_signal_type}`")
 
@@ -165,28 +168,52 @@ def main():
             should_alert = current_signal_type != "NONE" and (cached_data.get("ts") != ts_closed or cached_data.get("signal") != current_signal_type)
             
             if should_alert:
-                if current_signal_type == "SELL":
-                    task_title = f"PILNE: SPRZEDAJ {display_symbol}"
-                    msg = (
-                        f"🔴 **KRYTYCZNE ZAGROŻENIE: ROZWAŻ NATYCHMIASTOWĄ SPRZEDAŻ!** 🔴\n\n"
-                        f"🪙 **MONETA:** `{display_symbol}`\n"
-                        f"💰 **CENA:** **{display_price}**\n"
-                        f"📊 **RSI 4H:** **{rsi_4h_closed}** (PRÓG: {sell_rsi_threshold})\n"
-                        f"⚠️ **TREND 1D:** `{'WZROSTOWY' if is_uptrend_1d else 'SPADKOWY'}`\n"
-                        f"⚠️ **DODAJ ZADANIE DO WYKONANIA NATYCHMIAST.**"
-                    )
-                else:
-                    is_class_a = (current_signal_type == "BUY_A")
-                    rodzaj = "🟢 **SYGNAŁ KLASY A (LIDER RS + WOLUMEN)**" if is_class_a else "🟡 **SYGNAŁ KLASY B (OKAZJA SWING / SATELITA)**"
-                    task_title = f"KUP {display_symbol} ({'Klasa A' if is_class_a else 'Klasa B'})"
+                if current_signal_type == "BUY_MEGA":
+                    rodzaj = "🟢 **MEGA OKAZJA ZAKUPOWA (HOSSA + RS + WOLUMEN)** 🟢"
+                    task_title = f"MEGA OKAZJA: KUP {display_symbol}"
                     msg = (
                         f"{rodzaj}\n\n"
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
-                        f"📊 **RSI 4H:** `{rsi_4h_closed} / {buy_rsi_threshold}`\n"
-                        f"💪 **Siła Wzgl. (BTC):** `{'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}`\n"
-                        f"📈 **Wolumen:** `{'Skok (>1.4x) 🔥' if is_volume_spike else 'Wysychający/Stabilny 🧊'}`"
+                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
+                        f"💪 **Siła Wzgl. (BTC):** `Lider Rynku (Outperformer) 🟢`\n"
+                        f"📈 **Wolumen:** `Skok Obrotów (>1.4x) 🔥`\n"
+                        f"📈 **Trend 1D:** `Wzrostowy 🟢`"
                     )
+                elif current_signal_type == "BUY_SWING":
+                    rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)** 🟡"
+                    task_title = f"SWING: SPRAWDŹ {display_symbol}"
+                    msg = (
+                        f"{rodzaj}\n\n"
+                        f"🪙 **Moneta:** `{display_symbol}`\n"
+                        f"💰 **Cena:** `{display_price}`\n"
+                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
+                        f"💪 **Siła Wzgl. (BTC):** `{'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}`\n"
+                        f"📈 **Wolumen:** `{'Skok (>1.4x) 🔥' if is_volume_spike else 'Wysychający/Stabilny 🧊'}`\n"
+                        f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}`"
+                    )
+                elif current_signal_type == "SELL_TAKE_PROFIT":
+                    rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZACJA ZYSKU (TAKE PROFIT)** 🟠"
+                    task_title = f"TAKE PROFIT: {display_symbol} (RSI {rsi_4h_closed})"
+                    msg = (
+                        f"{rodzaj}\n\n"
+                        f"🪙 **Moneta:** `{display_symbol}`\n"
+                        f"💰 **Cena:** `{display_price}`\n"
+                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {sell_rsi_threshold}`\n"
+                        f"📈 **Trend 1D:** `Wzrostowy 🟢`"
+                    )
+                else: 
+                    rodzaj = "🔴 **KRYTYCZNA EWAKUACJA: SPRZEDAŻ W TRENDZIE SPADKOWYM!** 🔴"
+                    task_title = f"PILNE: SPRZEDAJ {display_symbol} (Trend spadkowy)"
+                    # Zgodnie z wytycznymi - komunikaty krytyczne w pełni pogrubione i CAPS LOCKIEM
+                    msg = (
+                        f"{rodzaj}\n\n"
+                        f"🪙 **MONETA:** `{display_symbol.upper()}`\n"
+                        f"💰 **CENA:** **{display_price.upper()}**\n"
+                        f"📊 **RSI 4H:** **{rsi_4h_closed}** (PRÓG: {sell_rsi_threshold})\n"
+                        f"📈 **TREND 1D:** `SPADKOWY 🔴`"
+                    )
+
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg.replace('**', ''))
 
@@ -205,4 +232,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+    
