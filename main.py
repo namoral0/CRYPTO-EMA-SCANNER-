@@ -198,7 +198,7 @@ def main():
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
-                        f"💪 **Ranga:** `{'FILAR CORE 💎' if is_core else 'Satelita 🚀'}`\n"
+                        f"💪 **Typ monety:** `{'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}`\n"
                         f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}`"
                     )
                 elif current_signal_type == "BUY_SWING":
@@ -220,7 +220,7 @@ def main():
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {sell_rsi_threshold}`\n"
-                        f"📈 **Typ:** `{'Rebalancing Core 💎' if is_core else 'Take Profit Satelita 🚀'}`"
+                        f"💪 **Typ monety:** `{'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}`"
                     )
                 else: 
                     rodzaj = "KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
@@ -254,4 +254,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+                    
