@@ -186,9 +186,26 @@ def main():
 
             digest_lines.append(f"• `{display_symbol}`: RSI `{rsi_4h_closed}` | Stan: `{current_signal_type}`")
 
+            # Inteligentny mechanizm Antyspamowy Cache
             cached_data = cache.get(symbol, {})
-            should_alert = current_signal_type != "NONE" and (cached_data.get("ts") != ts_closed or cached_data.get("signal") != current_signal_type)
+            last_ts = cached_data.get("ts", 0)
+            last_signal = cached_data.get("signal", "NONE")
+
+            should_alert = False
+            if current_signal_type != "NONE":
+                if last_ts != ts_closed:
+                    should_alert = True
+                elif last_signal != current_signal_type:
+                    should_alert = True
             
+            if current_signal_type != "NONE":
+                signal_to_save = current_signal_type
+            else:
+                if last_ts == ts_closed:
+                    signal_to_save = last_signal
+                else:
+                    signal_to_save = "NONE"
+
             if should_alert:
                 if current_signal_type == "BUY_MEGA":
                     rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)** 🟢"
@@ -198,8 +215,8 @@ def main():
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
-                        f"💪 **Typ monety:** `{'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}`\n"
-                        f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}`"
+                        f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n"
+                        f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}"
                     )
                 elif current_signal_type == "BUY_SWING":
                     rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)** 🟡"
@@ -209,8 +226,8 @@ def main():
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
-                        f"💪 **Siła Wzgl. (BTC):** `{'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}`\n"
-                        f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}`"
+                        f"💪 **Siła Wzgl. (BTC):** {'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}\n"
+                        f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}"
                     )
                 elif current_signal_type == "SELL_TAKE_PROFIT":
                     rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZACJA ZYSKU (TAKE PROFIT)** 🟠"
@@ -220,7 +237,7 @@ def main():
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {sell_rsi_threshold}`\n"
-                        f"💪 **Typ monety:** `{'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}`"
+                        f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}"
                     )
                 else: 
                     rodzaj = "KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
@@ -236,7 +253,7 @@ def main():
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg.replace('**', ''))
 
-            cache[symbol] = {"ts": ts_closed, "signal": current_signal_type, "last_digest_date": cached_data.get("last_digest_date", "")}
+            cache[symbol] = {"ts": ts_closed, "signal": signal_to_save, "last_digest_date": cached_data.get("last_digest_date", "")}
         except Exception as e:
             print(f"❌ Błąd dla {symbol}: {e}")
 
@@ -254,4 +271,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                    
+    
