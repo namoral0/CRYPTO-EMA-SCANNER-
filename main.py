@@ -55,10 +55,11 @@ def main():
     
     exchange = ccxt.kraken({'enableRateLimit': True})
     usd_gbp_rate = 0.78
+    
     try:
-        ticker_fx = exchange.fetch_ticker("GBP/USD")
-        if ticker_fx and ticker_fx.get('last'):
-            usd_gbp_rate = 1.0 / ticker_fx['last']
+        ticker_gbp = exchange.fetch_ticker("GBP/USD")
+        if ticker_gbp and ticker_gbp.get('last'):
+            usd_gbp_rate = 1.0 / ticker_gbp['last']
     except: pass
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -150,8 +151,9 @@ def main():
             is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
             
             if symbol.endswith("/USD"):
-                display_price = f"${close_closed:.4f} (£{close_closed * usd_gbp_rate:.4f})"
-                display_symbol = symbol.replace("/USD", "/GBP")
+                price_gbp = close_closed * usd_gbp_rate
+                display_price = f"${close_closed:.4f} (£{price_gbp:.4f})"
+                display_symbol = symbol 
             else:
                 display_price = f"£{close_closed:.4f}"
                 display_symbol = symbol
@@ -184,9 +186,20 @@ def main():
                 else:
                     current_signal_type = "SELL_TAKE_PROFIT" if is_uptrend_1d else "SELL_EVACUATION"
 
-            digest_lines.append(f"• `{display_symbol}`: RSI `{rsi_4h_closed}` | Stan: `{current_signal_type}`")
+            status_map = {
+                "NONE": "⚪ Neutralny",
+                "BUY_MEGA": "🟢 MEGA OKAZJA",
+                "BUY_SWING": "🟡 Dołek 4H",
+                "SELL_TAKE_PROFIT": "🟠 Take Profit",
+                "SELL_EVACUATION": "🔴 Ewakuacja"
+            }
+            status_txt = status_map.get(current_signal_type, "⚪ Neutralny")
+            trend_txt = "🟢" if is_uptrend_1d else "🔴"
+            
+            digest_lines.append(
+                f"🪙 **{display_symbol}**: `{display_price}` | RSI: `{rsi_4h_closed}` | Trend 1D: {trend_txt} | Stan: {status_txt}"
+            )
 
-            # Inteligentny mechanizm Antyspamowy Cache
             cached_data = cache.get(symbol, {})
             last_ts = cached_data.get("ts", 0)
             last_signal = cached_data.get("signal", "NONE")
@@ -241,7 +254,7 @@ def main():
                     )
                 else: 
                     rodzaj = "KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
-                    task_title = f"🔴 PILNE: SPRZEDAJ {display_symbol.upper()} (TREND SPADKOWY) 🔴"
+                    task_title = f"🔴 PILNE: SPRZEDAJ {display_symbol.upper()} 🔴"
                     msg = (
                         f"🔴 **{rodzaj}** 🔴\n\n"
                         f"🔴 **MONETA: {display_symbol.upper()}** 🔴\n"
@@ -257,15 +270,19 @@ def main():
         except Exception as e:
             print(f"❌ Błąd dla {symbol}: {e}")
 
-    if cache:
-        any_cache_date = list(cache.values())[0].get("last_digest_date", "")
-        if any_cache_date != today_str and digest_lines:
-            digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)** 📋\n\n" + "\n".join(digest_lines)
-            send_telegram_alert(digest_msg)
-            add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg)
+    any_cache_date = ""
+    for v in cache.values():
+        if isinstance(v, dict) and "last_digest_date" in v:
+            any_cache_date = v["last_digest_date"]
+            break
             
-            for sym in cache: 
-                cache[sym]["last_digest_date"] = today_str
+    if any_cache_date != today_str and digest_lines:
+        digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)** 📋\n\n" + "\n".join(digest_lines)
+        send_telegram_alert(digest_msg)
+        add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
+        
+        for sym in cache: 
+            cache[sym]["last_digest_date"] = today_str
 
     with open(CACHE_FILE, "w") as f: json.dump(cache, f)
 
