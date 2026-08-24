@@ -187,7 +187,7 @@ def main():
                     current_signal_type = "SELL_TAKE_PROFIT" if is_uptrend_1d else "SELL_EVACUATION"
 
             status_map = {
-                "NONE": "Neutralny",
+                "NONE": "⚪ Neutralny",
                 "BUY_MEGA": "🟢 MEGA OKAZJA",
                 "BUY_SWING": "🟡 Dołek 4H",
                 "SELL_TAKE_PROFIT": "🟠 Take Profit",
