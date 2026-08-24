@@ -187,18 +187,16 @@ def main():
                     current_signal_type = "SELL_TAKE_PROFIT" if is_uptrend_1d else "SELL_EVACUATION"
 
             status_map = {
-                "NONE": "⚪ Neutralny",
+                "NONE": "Neutralny",
                 "BUY_MEGA": "🟢 MEGA OKAZJA",
                 "BUY_SWING": "🟡 Dołek 4H",
                 "SELL_TAKE_PROFIT": "🟠 Take Profit",
                 "SELL_EVACUATION": "🔴 Ewakuacja"
             }
-            status_txt = status_map.get(current_signal_type, "⚪ Neutralny")
-            trend_txt = "🟢" if is_uptrend_1d else "🔴"
+            status_txt = status_map.get(current_signal_type, "Neutralny")
+            trend_txt = "↗️" if is_uptrend_1d else "↘️"
             
-            digest_lines.append(
-                f"🪙 **{display_symbol}**: `{display_price}` | RSI: `{rsi_4h_closed}` | Trend 1D: {trend_txt} | Stan: {status_txt}"
-            )
+            digest_lines.append(f"🪙 **{display_symbol}** — {display_price}\n  └ RSI: {rsi_4h_closed} | Trend: {trend_txt} | Stan: {status_txt}\n")
 
             cached_data = cache.get(symbol, {})
             last_ts = cached_data.get("ts", 0)
@@ -277,7 +275,7 @@ def main():
             break
             
     if any_cache_date != today_str and digest_lines:
-        digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)** 📋\n\n" + "\n".join(digest_lines)
+        digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)** 📋\n\n" + "".join(digest_lines)
         send_telegram_alert(digest_msg)
         add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
         
