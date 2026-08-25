@@ -187,7 +187,7 @@ def main():
                     current_signal_type = "SELL_TAKE_PROFIT" if is_uptrend_1d else "SELL_EVACUATION"
 
             status_map = {
-                "NONE": "⚪ Neutralny",
+                "NONE": "⚪️ Neutralny",
                 "BUY_MEGA": "🟢 MEGA OKAZJA",
                 "BUY_SWING": "🟡 Dołek 4H",
                 "SELL_TAKE_PROFIT": "🟠 Take Profit",
@@ -219,7 +219,7 @@ def main():
 
             if should_alert:
                 if current_signal_type == "BUY_MEGA":
-                    rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)** 🟢"
+                    rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)**"
                     task_title = f"MEGA OKAZJA: KUP {display_symbol}"
                     msg = (
                         f"{rodzaj}\n\n"
@@ -230,7 +230,7 @@ def main():
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}"
                     )
                 elif current_signal_type == "BUY_SWING":
-                    rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)** 🟡"
+                    rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)**"
                     task_title = f"SWING: SPRAWDŹ {display_symbol}"
                     msg = (
                         f"{rodzaj}\n\n"
@@ -241,7 +241,7 @@ def main():
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}"
                     )
                 elif current_signal_type == "SELL_TAKE_PROFIT":
-                    rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZACJA ZYSKU (TAKE PROFIT)** 🟠"
+                    rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZACJA ZYSKU (TAKE PROFIT)**"
                     task_title = f"TAKE PROFIT: {display_symbol} (RSI {rsi_4h_closed})"
                     msg = (
                         f"{rodzaj}\n\n"
@@ -252,13 +252,13 @@ def main():
                     )
                 else: 
                     rodzaj = "KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
-                    task_title = f"🔴 PILNE: SPRZEDAJ {display_symbol.upper()} 🔴"
+                    task_title = f"🔴 PILNE: SPRZEDAJ {display_symbol.upper()}"
                     msg = (
-                        f"🔴 **{rodzaj}** 🔴\n\n"
-                        f"🔴 **MONETA: {display_symbol.upper()}** 🔴\n"
-                        f"🔴 **CENA: {display_price.upper()}** 🔴\n"
-                        f"🔴 **RSI 4H: {rsi_4h_closed} (PRÓG: {sell_rsi_threshold})** 🔴\n"
-                        f"🔴 **TREND 1D: SPADKOWY** 🔴"
+                        f"🔴 **{rodzaj}**\n\n"
+                        f"🔴 **MONETA: {display_symbol.upper()}**\n"
+                        f"🔴 **CENA: {display_price.upper()}**\n"
+                        f"🔴 **RSI 4H: {rsi_4h_closed} (PRÓG: {sell_rsi_threshold})**\n"
+                        f"🔴 **TREND 1D: SPADKOWY**"
                     )
 
                 send_telegram_alert(msg)
@@ -275,7 +275,7 @@ def main():
             break
             
     if any_cache_date != today_str and digest_lines:
-        digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)** 📋\n\n" + "".join(digest_lines)
+        digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines)
         send_telegram_alert(digest_msg)
         add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
         
@@ -286,4 +286,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                
