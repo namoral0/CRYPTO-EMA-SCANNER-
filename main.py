@@ -158,12 +158,16 @@ def main():
                 display_price = f"£{close_closed:.4f}"
                 display_symbol = symbol
             
-            base_buy, base_sell = (30, 70) if is_core else (25, 75)
-            confirm_15m_buy, confirm_15m_sell = (40, 60) if is_core else (35, 65)
+            # --- ZAOSTROZONE PROGI WEJŚCIA DLA SATELIT ---
+            base_buy, base_sell = (28, 70) if is_core else (22, 78)
+            confirm_15m_buy, confirm_15m_sell = (38, 62) if is_core else (32, 68)
 
             volatility_multiplier = (bbw_closed / bbw_avg) if (not pd.isna(bbw_avg) and bbw_avg > 0) else 1.0
-            buy_rsi_threshold = max(20, base_buy - 3) if volatility_multiplier > 1.3 else (min(35, base_buy + 3) if volatility_multiplier < 0.7 else base_buy)
-            sell_rsi_threshold = min(80, base_sell + 3) if volatility_multiplier > 1.3 else (max(65, base_sell - 3) if volatility_multiplier < 0.7 else base_sell)
+            
+            # Dolna granica RSI dla Satelit schodzi do 18 przy wysokiej zmienności
+            min_buy_floor = 22 if is_core else 18
+            buy_rsi_threshold = max(min_buy_floor, base_buy - 4) if volatility_multiplier > 1.3 else (min(33, base_buy + 3) if volatility_multiplier < 0.7 else base_buy)
+            sell_rsi_threshold = min(82, base_sell + 3) if volatility_multiplier > 1.3 else (max(65, base_sell - 3) if volatility_multiplier < 0.7 else base_sell)
 
             if is_uptrend_1d:
                 sell_rsi_threshold = max(sell_rsi_threshold, 75 if is_core else 80)
@@ -174,7 +178,12 @@ def main():
             is_oversold_4h = rsi_4h_closed <= buy_rsi_threshold
             is_overbought_4h = rsi_4h_closed >= sell_rsi_threshold
             
-            is_base_buy = ((is_oversold_4h and rsi_15m_live <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed)) and not is_anomaly_candle
+            # DLA SATELIT: Wymagane głębokie RSI ORAZ (potwierdzenie 15m LUB wyjście poza dolną wstęgę BB)
+            if is_core:
+                is_base_buy = ((is_oversold_4h and rsi_15m_live <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed)) and not is_anomaly_candle
+            else:
+                is_base_buy = (is_oversold_4h and (rsi_15m_live <= confirm_15m_buy or close_closed <= bb_lower_closed)) and not is_anomaly_candle
+
             is_base_sell = ((is_overbought_4h and rsi_15m_live >= confirm_15m_sell) or crossover_down or (is_overbought_4h and close_closed >= bb_upper_closed)) and not is_anomaly_candle
 
             current_signal_type = "NONE"
@@ -286,4 +295,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
+        
