@@ -1,298 +1,303 @@
 import os
-import ccxt
-import pandas as pd
-import requests
+import datetime
 import json
+import requests
 import time
-from datetime import datetime, timezone
+import yfinance as yf
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from zoneinfo import ZoneInfo
 
-try:
-    from google.oauth2.service_account import Credentials
-    from googleapiclient.discovery import build
-    HAS_GOOGLE = True
-except ImportError:
-    HAS_GOOGLE = False
+# --- KONFIGURACJA ZMIENNYCH ŚRODOWISKOWYCH ---
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
+GOOGLE_TASKS_CREDENTIALS = os.getenv('GOOGLE_TASKS_CREDENTIALS')
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
+CORE_STOCKS = ['ASML.AS', 'V']
+HIGH_BETA_STOCKS = ['RKLB', 'IONQ']
+TICKERS = ['ASML.AS', 'V', 'BESI.AS', 'RKLB', 'SMHN.DE', 'IONQ', 'OVH.PA', 'IFX.DE', 'STMPA.PA']
+CACHE_FILE = "cache_akcje.json"
 
-CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
-SYMBOLS = [
-    "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
-    "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/USD", "NEAR/USD",
-    "TAO/USD", "RENDER/USD"
-]
-CACHE_FILE = "cache.json"
+def get_exchange_rate(ticker_symbol):
+    try:
+        fx = yf.Ticker(ticker_symbol).history(period="1d")
+        return fx['Close'].iloc[-1]
+    except Exception:
+        return 0.85 if 'EUR' in ticker_symbol else 0.78
 
-def send_telegram_alert(msg):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+def calculate_rsi(series, window=14):
+    clean = series.dropna()
+    if len(clean) < window: return 50.0
+    delta = clean.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = (-delta.where(delta < 0, 0))
+    avg_gain = gain.ewm(alpha=1/window, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/window, adjust=False).mean().replace(0, 1e-10)
+    rs = avg_gain / avg_loss
+    return round((100 - (100 / (1 + rs))).iloc[-1], 2)
+
+def send_telegram(message):
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown", "disable_web_page_preview": True}, 
+                timeout=10
+            )
+        except Exception: pass
+
+def get_google_sheet():
+    if not GOOGLE_TASKS_CREDENTIALS or not SPREADSHEET_ID: return None
+    try:
+        creds = Credentials.from_service_account_info(json.loads(GOOGLE_TASKS_CREDENTIALS), scopes=["https://www.googleapis.com/auth/spreadsheets"])
+        return gspread.authorize(creds).open_by_key(SPREADSHEET_ID).sheet1
+    except Exception: return None
 
 def add_to_tasks(title, notes):
-    if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS: return
+    if not GOOGLE_TASKS_CREDENTIALS: return
     try:
-        creds_dict = json.loads(GOOGLE_TASKS_CREDENTIALS)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/tasks"])
-        service = build('tasks', 'v1', credentials=creds)
-        service.tasks().insert(tasklist='@default', body={'title': title, 'notes': notes}).execute()
-    except Exception as e:
-        print(f"❌ Błąd Tasks: {e}")
+        creds = Credentials.from_service_account_info(json.loads(GOOGLE_TASKS_CREDENTIALS), scopes=["https://www.googleapis.com/auth/tasks"])
+        build('tasks', 'v1', credentials=creds).tasks().insert(tasklist='@default', body={'title': title, 'notes': notes}).execute()
+    except Exception: pass
 
 def main():
+    uk_now = datetime.datetime.now(ZoneInfo("Europe/London"))
+    if uk_now.weekday() >= 5: 
+        print("Weekend. Giełda akcji jest zamknięta.")
+        return
+
+    today_str = uk_now.strftime("%Y-%m-%d")
+    now_str = uk_now.strftime("%Y-%m-%d %H:%M")
+    
     cache = {}
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, "r") as f: 
-                loaded_cache = json.load(f)
-                for k, v in loaded_cache.items():
-                    if isinstance(v, int):
-                        cache[k] = {"ts": v, "signal": "NONE", "last_digest_date": ""}
-                    elif isinstance(v, dict):
-                        cache[k] = v
+            with open(CACHE_FILE, "r") as f: cache = json.load(f)
         except Exception: pass
+
+    sheet = get_google_sheet()
     
-    exchange = ccxt.kraken({'enableRateLimit': True})
-    usd_gbp_rate = 0.78
+    # Pobranie kursów walut do przeliczenia na GBP
+    rate_eur_gbp = get_exchange_rate('EURGBP=X')
+    rate_usd_gbp = get_exchange_rate('GBP=X') 
     
+    benchmark_df = None
     try:
-        ticker_gbp = exchange.fetch_ticker("GBP/USD")
-        if ticker_gbp and ticker_gbp.get('last'):
-            usd_gbp_rate = 1.0 / ticker_gbp['last']
-    except: pass
-
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        benchmark_df = yf.Ticker("^GSPC").history(period="1y", interval="1d")
+    except Exception: pass
+    
     digest_lines = []
-    btc_data_cache = {}
 
-    for symbol in SYMBOLS:
+    for ticker in TICKERS:
         try:
             time.sleep(1.2)
-            is_core = symbol in CORE_CRYPTO
-            quote_currency = symbol.split('/')[1]
-            btc_symbol = f"BTC/{quote_currency}"
+            is_core = ticker in CORE_STOCKS
+            is_european = ticker.endswith(('.AS', '.PA', '.DE', '.MC'))
+            
+            stock_icon = "🏛️"
+            ticker_link = f"[{ticker}](https://finance.yahoo.com/quote/{ticker})"
+            
+            stock = yf.Ticker(ticker)
+            
+            # =========================================================================
+            # KROK 1: ANALIZA MAKRO (1D) — TŁO RYNKOWE, TREND I RYZYKO
+            # =========================================================================
+            df_1d = stock.history(period="1y", interval="1d").ffill()
+            clean_1d_close = df_1d['Close'].dropna()
+            if len(clean_1d_close) < 50: continue
+            
+            rate = rate_eur_gbp if is_european else rate_usd_gbp
+            
+            # Pobranie ceny rynkowej live i przeliczenie na GBP
+            try:
+                price_native = float(stock.fast_info.get('lastPrice', clean_1d_close.iloc[-1]))
+            except Exception:
+                price_native = clean_1d_close.iloc[-1]
+                
+            price_gbp = price_native * rate
+            price_display = f"£{price_gbp:.2f}"
+            
+            high_52w = df_1d['High'].dropna().max()
+            drawdown_pct = round(((price_native - high_52w) / high_52w) * 100, 1) if high_52w > 0 else 0
+            
+            ema200_1d = clean_1d_close.ewm(span=200, adjust=False).mean().iloc[-1]
+            is_uptrend_1d = price_native > ema200_1d
+            
+            rsi_1d = calculate_rsi(clean_1d_close)
+            
+            df_1d['BB_mid'] = clean_1d_close.rolling(window=20).mean()
+            df_1d['BB_std'] = clean_1d_close.rolling(window=20).std()
+            df_1d['BBW'] = (df_1d['BB_mid'] + (df_1d['BB_std'] * 2) - (df_1d['BB_mid'] - (df_1d['BB_std'] * 2))) / df_1d['BB_mid']
+            bbw_avg = df_1d['BBW'].dropna().rolling(window=20).mean().iloc[-1]
+            bbw_current = df_1d['BBW'].dropna().iloc[-1]
+            vol_mult = (bbw_current / bbw_avg) if (not pd.isna(bbw_avg) and bbw_avg > 0) else 1.0
 
-            if btc_symbol not in btc_data_cache:
-                time.sleep(1)
-                df_1d_btc = pd.DataFrame(exchange.fetch_ohlcv(btc_symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-                time.sleep(1)
-                df_4h_btc = pd.DataFrame(exchange.fetch_ohlcv(btc_symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-                btc_data_cache[btc_symbol] = {"1d": df_1d_btc, "4h": df_4h_btc}
+            true_range = pd.concat([df_1d['High'] - df_1d['Low'], (df_1d['High'] - df_1d['Close'].shift()).abs(), (df_1d['Low'] - df_1d['Close'].shift()).abs()], axis=1).max(axis=1)
+            df_1d['ATR'] = true_range.rolling(window=14).mean()
+            df_1d['ATR_MA'] = df_1d['ATR'].rolling(window=20).mean()
+            atr_current = df_1d['ATR'].iloc[-1]
+            atr_ma_current = df_1d['ATR_MA'].iloc[-1]
+            is_anomaly = atr_current > (atr_ma_current * 2.5) if not pd.isna(atr_ma_current) and atr_ma_current > 0 else False
 
-            df_1d_btc = btc_data_cache[btc_symbol]["1d"]
-            df_4h_btc = btc_data_cache[btc_symbol]["4h"]
+            is_strong_vs_market = True
+            if benchmark_df is not None:
+                stock_close = clean_1d_close.copy()
+                if hasattr(stock_close.index, 'tz') and stock_close.index.tz is not None:
+                    stock_close.index = stock_close.index.tz_localize(None)
+                stock_close.index = pd.to_datetime(stock_close.index).normalize()
+                
+                bench_close = benchmark_df['Close'].dropna().copy()
+                if hasattr(bench_close.index, 'tz') and bench_close.index.tz is not None:
+                    bench_close.index = bench_close.index.tz_localize(None)
+                bench_close.index = pd.to_datetime(bench_close.index).normalize()
+                
+                combined = pd.DataFrame({'stock': stock_close, 'bench': bench_close}).dropna()
+                if len(combined) > 20:
+                    rs_series = combined['stock'] / (combined['bench'] + 1e-10)
+                    is_strong_vs_market = rs_series.iloc[-1] >= rs_series.ewm(span=20, adjust=False).mean().iloc[-1]
 
-            df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            if len(df_1d) < 30: continue  
-            
-            ema_200_1d = df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
-            is_uptrend_1d = df_1d['close'].iloc[-1] > ema_200_1d
+            bb_1w_msg = "📐 **Wsparcie 1W:** `Brak danych`"
+            try:
+                df_1w = stock.history(period="2y", interval="1wk").ffill()
+                clean_1w = df_1w['Close'].dropna()
+                if len(clean_1w) >= 21:
+                    closed_1w = clean_1w.iloc[:-1]
+                    val_native = closed_1w.rolling(20).mean().iloc[-1] - (closed_1w.rolling(20).std().iloc[-1] * 2)
+                    if not pd.isna(val_native):
+                        val_gbp = val_native * rate
+                        dist = round(((val_native - price_native) / price_native) * 100, 1) if price_native > 0 else 0
+                        bb_1w_msg = f"📐 **Wsparcie 1W (BB):** `£{val_gbp:.2f}`\n📉 **Dystans do 1W:** `{dist}%`"
+            except: pass
 
-            df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            if len(df_4h) < 100: continue
-            
-            ts_closed = int(df_4h['ts'].iloc[-2])
-            
-            df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
-            df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
-            
-            delta_4h = df_4h['close'].diff()
-            gain_4h = delta_4h.where(delta_4h > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-            loss_4h = (-delta_4h.where(delta_4h < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
-            df_4h['RSI'] = 100 - (100 / (1 + (gain_4h / loss_4h)))
-            
-            df_4h['BB_mid'] = df_4h['close'].rolling(window=20).mean()
-            df_4h['BB_std'] = df_4h['close'].rolling(window=20).std()
-            df_4h['BB_upper'] = df_4h['BB_mid'] + (df_4h['BB_std'] * 2)
-            df_4h['BB_lower'] = df_4h['BB_mid'] - (df_4h['BB_std'] * 2)
-            df_4h['BBW'] = (df_4h['BB_upper'] - df_4h['BB_lower']) / df_4h['BB_mid']
-            df_4h['BBW_MA'] = df_4h['BBW'].rolling(window=20).mean()
-
-            true_range = pd.concat([df_4h['h'] - df_4h['l'], (df_4h['h'] - df_4h['close'].shift()).abs(), (df_4h['l'] - df_4h['close'].shift()).abs()], axis=1).max(axis=1)
-            df_4h['ATR'] = true_range.rolling(window=14).mean()
-            df_4h['ATR_MA'] = df_4h['ATR'].rolling(window=20).mean()
-            df_4h['Vol_MA'] = df_4h['v'].rolling(window=20).mean()
-
-            is_strong_vs_btc_4h = True
-            if symbol != btc_symbol:
-                merged_rs = pd.merge(df_4h[['ts', 'close']], df_4h_btc[['ts', 'close']], on='ts', suffixes=('', '_btc'))
-                if len(merged_rs) > 20:
-                    merged_rs.set_index('ts', inplace=True)
-                    rs_series = merged_rs['close'] / (merged_rs['close_btc'] + 1e-10)
-                    rs_ema = rs_series.ewm(span=20, adjust=False).mean()
-                    
-                    if ts_closed in merged_rs.index:
-                        is_strong_vs_btc_4h = bool(rs_series.loc[ts_closed] >= rs_ema.loc[ts_closed])
-                    else:
-                        is_strong_vs_btc_4h = bool(rs_series.iloc[-1] >= rs_ema.iloc[-1])
-
-            df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="15m", limit=100), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            if len(df_15m) < 20: continue
-            delta_15m = df_15m['close'].diff()
-            gain_15m = delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-            loss_15m = (-delta_15m.where(delta_15m < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
-            df_15m['RSI'] = 100 - (100 / (1 + (gain_15m / loss_15m)))
-
-            rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
-            rsi_15m_live = round(df_15m['RSI'].iloc[-1], 1)
-            
-            close_closed = df_4h['close'].iloc[-2]
-            bb_upper_closed = df_4h['BB_upper'].iloc[-2]
-            bb_lower_closed = df_4h['BB_lower'].iloc[-2]
-            avg_atr = df_4h['ATR_MA'].iloc[-2]
-            bbw_closed = df_4h['BBW'].iloc[-2]
-            bbw_avg = df_4h['BBW_MA'].iloc[-2]
-            
-            current_vol = df_4h['v'].iloc[-2]
-            avg_vol = df_4h['Vol_MA'].iloc[-2]
-            vol_multiplier = current_vol / avg_vol if not pd.isna(avg_vol) and avg_vol > 0 else 0
-            is_volume_spike = vol_multiplier > 1.4
-            is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
-            
-            if symbol.endswith("/USD"):
-                price_gbp = close_closed * usd_gbp_rate
-                display_price = f"${close_closed:.4f} (£{price_gbp:.4f})"
-                display_symbol = symbol 
-            else:
-                display_price = f"£{close_closed:.4f}"
-                display_symbol = symbol
-            
-            # --- ZAOSTROZONE PROGI WEJŚCIA DLA SATELIT ---
-            base_buy, base_sell = (28, 70) if is_core else (22, 78)
-            confirm_15m_buy, confirm_15m_sell = (38, 62) if is_core else (32, 68)
-
-            volatility_multiplier = (bbw_closed / bbw_avg) if (not pd.isna(bbw_avg) and bbw_avg > 0) else 1.0
-            
-            # Dolna granica RSI dla Satelit schodzi do 18 przy wysokiej zmienności
-            min_buy_floor = 22 if is_core else 18
-            buy_rsi_threshold = max(min_buy_floor, base_buy - 4) if volatility_multiplier > 1.3 else (min(33, base_buy + 3) if volatility_multiplier < 0.7 else base_buy)
-            sell_rsi_threshold = min(82, base_sell + 3) if volatility_multiplier > 1.3 else (max(65, base_sell - 3) if volatility_multiplier < 0.7 else base_sell)
-
-            if is_uptrend_1d:
-                sell_rsi_threshold = max(sell_rsi_threshold, 75 if is_core else 80)
-
-            crossover_up = (df_4h['EMA_20'].iloc[-3] <= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] > df_4h['EMA_50'].iloc[-2])
-            crossover_down = (df_4h['EMA_20'].iloc[-3] >= df_4h['EMA_50'].iloc[-3] and df_4h['EMA_20'].iloc[-2] < df_4h['EMA_50'].iloc[-2])
-            
-            is_oversold_4h = rsi_4h_closed <= buy_rsi_threshold
-            is_overbought_4h = rsi_4h_closed >= sell_rsi_threshold
-            
-            # DLA SATELIT: Wymagane głębokie RSI ORAZ (potwierdzenie 15m LUB wyjście poza dolną wstęgę BB)
             if is_core:
-                is_base_buy = ((is_oversold_4h and rsi_15m_live <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed)) and not is_anomaly_candle
+                base_buy_thr = 38
+                min_floor = 32
+            elif ticker in HIGH_BETA_STOCKS:
+                base_buy_thr = 26
+                min_floor = 22
             else:
-                is_base_buy = (is_oversold_4h and (rsi_15m_live <= confirm_15m_buy or close_closed <= bb_lower_closed)) and not is_anomaly_candle
+                base_buy_thr = 33
+                min_floor = 28
 
-            is_base_sell = ((is_overbought_4h and rsi_15m_live >= confirm_15m_sell) or crossover_down or (is_overbought_4h and close_closed >= bb_upper_closed)) and not is_anomaly_candle
+            buy_thr_4h = max(min_floor, base_buy_thr - 4) if vol_mult > 1.3 else base_buy_thr
+            sell_thr_4h = min(72, 65 + 4) if vol_mult > 1.3 else 65
+            if is_uptrend_1d: sell_thr_4h = max(sell_thr_4h, 75)
 
-            current_signal_type = "NONE"
-            if is_base_buy:
-                current_signal_type = "BUY_MEGA" if (is_volume_spike or is_core) else "BUY_SWING"
-            elif is_base_sell:
-                if is_core:
-                    current_signal_type = "SELL_TAKE_PROFIT"
+            # =========================================================================
+            # KROK 2: ANALIZA MIKRO (4H) — PRECYZYJNY SPUST TRANSAKCYJNY (TRIGGER)
+            # =========================================================================
+            df_1h = stock.history(period="3mo", interval="1h").ffill()
+            if len(df_1h) > 50:
+                if hasattr(df_1h.index, 'tz') and df_1h.index.tz is not None:
+                    df_1h.index = df_1h.index.tz_convert("Europe/London").tz_localize(None)
                 else:
-                    current_signal_type = "SELL_TAKE_PROFIT" if is_uptrend_1d else "SELL_EVACUATION"
+                    df_1h.index = pd.to_datetime(df_1h.index)
+                    if hasattr(df_1h.index, 'tz') and df_1h.index.tz is not None:
+                        df_1h.index = df_1h.index.tz_localize(None)
+                
+                if is_european:
+                    rth_start, rth_end = datetime.time(8, 0), datetime.time(16, 30)
+                    df_rth = df_1h.between_time("08:00", "16:30").copy()
+                    offset = pd.Timedelta(hours=0)
+                else:
+                    rth_start, rth_end = datetime.time(14, 30), datetime.time(21, 0)
+                    df_rth = df_1h.between_time("14:30", "21:00").copy()
+                    offset = pd.Timedelta(hours=2, minutes=30) 
 
-            status_map = {
-                "NONE": "⚪️ Neutralny",
-                "BUY_MEGA": "🟢 MEGA OKAZJA",
-                "BUY_SWING": "🟡 Dołek 4H",
-                "SELL_TAKE_PROFIT": "🟠 Take Profit",
-                "SELL_EVACUATION": "🔴 Ewakuacja"
-            }
-            status_txt = status_map.get(current_signal_type, "Neutralny")
+                current_time_val = uk_now.time()
+                if rth_start <= current_time_val <= rth_end and len(df_rth) > 0:
+                    df_rth.iloc[-1, df_rth.columns.get_loc('Close')] = price_native
+
+                if len(df_rth) > 0:
+                    df_4h_close = df_rth['Close'].dropna().resample('4h', origin='start', offset=offset).last().dropna()
+                    rsi_4h = calculate_rsi(df_4h_close)
+                else:
+                    rsi_4h = 50.0
+            else:
+                rsi_4h = 50.0
+
+            # =========================================================================
+            # KROK 3: KWALIFIKACJA SYGNAŁU (SITOWANIE 1D + 4H)
+            # =========================================================================
+            if is_anomaly:
+                is_buy = False
+                is_sell = False
+            else:
+                is_buy = (rsi_4h < buy_thr_4h)
+                is_sell = (rsi_4h >= sell_thr_4h)
+
+            signal = "NONE"
+            if is_sell:
+                signal = "WYKUPIENIE"
+            elif is_buy:
+                daily_confirm_thr = buy_thr_4h + (4 if is_core else 3)
+                if (rsi_1d < daily_confirm_thr) or (is_strong_vs_market and vol_mult > 1.4) or is_core:
+                    signal = "WYPRZEDANIE_ZIELONE"
+                else:
+                    signal = "WYPRZEDANIE_ZOLTE"
+
+            status_txt = {
+                "NONE": "⚪ Neutralny", 
+                "WYPRZEDANIE_ZIELONE": "🟢 MEGA OKAZJA", 
+                "WYPRZEDANIE_ZOLTE": "🟡 Dołek 4H", 
+                "WYKUPIENIE": "🟠 Take Profit"
+            }.get(signal, "⚪ Neutralny")
+            
             trend_txt = "↗️" if is_uptrend_1d else "↘️"
-            
-            digest_lines.append(f"🪙 **{display_symbol}** — {display_price}\n  └ RSI: {rsi_4h_closed} | Trend: {trend_txt} | Stan: {status_txt}\n")
+            digest_lines.append(f"{stock_icon} {ticker_link} — {price_display}\n  └ RSI 4h: {rsi_4h} | Trend: {trend_txt} | Stan: {status_txt}\n")
 
-            cached_data = cache.get(symbol, {})
-            last_ts = cached_data.get("ts", 0)
-            last_signal = cached_data.get("signal", "NONE")
+            # =========================================================================
+            # KROK 4: WYSYŁANIE ALERTÓW (Z BLOKADĄ EUROPY PO 16:30 UK)
+            # =========================================================================
+            last_sig = cache.get(ticker, {}).get("signal", "NONE")
+            last_date = cache.get(ticker, {}).get("date", "")
 
-            should_alert = False
-            if current_signal_type != "NONE":
-                if last_ts != ts_closed:
-                    should_alert = True
-                elif last_signal != current_signal_type:
-                    should_alert = True
-            
-            if current_signal_type != "NONE":
-                signal_to_save = current_signal_type
-            else:
-                if last_ts == ts_closed:
-                    signal_to_save = last_signal
-                else:
-                    signal_to_save = "NONE"
+            if signal != "NONE" and (last_date != today_str or last_sig != signal):
+                
+                is_after_eu_close = is_european and (uk_now.hour > 16 or (uk_now.hour == 16 and uk_now.minute >= 30))
+                
+                if not is_after_eu_close:
+                    ranga_label = "Core 🏛️" if is_core else "Satelita 🛰️"
+                    
+                    if signal == "WYKUPIENIE":
+                        if is_uptrend_1d:
+                            title = f"TAKE PROFIT: {ticker} (RSI {rsi_4h})"
+                            body = f"🟠 **REALIZACJA ZYSKU! REBALANCING!**\n\n{stock_icon} **Spółka:** {ticker_link}\n💰 **Cena:** {price_display}\n📉 **Od szczytu (52W):** {drawdown_pct}%\n💪 **Ranga:** {ranga_label}\n📊 **RSI 4H:** {rsi_4h} (Próg: {sell_thr_4h})\n📊 **RSI 1d:** {rsi_1d}"
+                        else:
+                            title = f"🔴 PILNE: SPRZEDAJ! {ticker.upper()}"
+                            body = f"🔴 **EWAKUACJA! SPADEK TRENDU! NATYCHMIAST SPRZEDAJ!**\n\n🔴 **SPÓŁKA: {ticker_link}**\n🔴 **CENA: {price_display}**\n🔴 **RSI 4H: {rsi_4h}**"
+                    elif signal == "WYPRZEDANIE_ZIELONE":
+                        title = f"MEGA OKAZJA: KUP {ticker}"
+                        body = f"🟢 **MEGA OKAZJA / HOSSA (KUPNO DOŁKA)**\n\n{stock_icon} **Spółka:** {ticker_link}\n💰 **Cena:** {price_display}\n📉 **Od szczytu (52W):** {drawdown_pct}%\n💪 **Ranga:** {ranga_label}\n📊 **RSI 4h:** {rsi_4h} (Próg: {buy_thr_4h})\n📊 **RSI 1d:** {rsi_1d}\n{bb_1w_msg}"
+                    else:
+                        title = f"SWING: OBSERWUJ {ticker}"
+                        body = f"🟡 **OKAZJA SWING / {ranga_label.upper()} (DOŁEK 4H)**\n\n{stock_icon} **Spółka:** {ticker_link}\n💰 **Cena:** {price_display}\n📉 **Od szczytu (52W):** {drawdown_pct}%\n💪 **Ranga:** {ranga_label}\n📊 **RSI 4h:** {rsi_4h} (Próg: {buy_thr_4h})\n📊 **RSI 1d:** {rsi_1d}\n{bb_1w_msg}"
 
-            if should_alert:
-                if current_signal_type == "BUY_MEGA":
-                    rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)**"
-                    task_title = f"MEGA OKAZJA: KUP {display_symbol}"
-                    msg = (
-                        f"{rodzaj}\n\n"
-                        f"🪙 **Moneta:** `{display_symbol}`\n"
-                        f"💰 **Cena:** `{display_price}`\n"
-                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
-                        f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n"
-                        f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}"
-                    )
-                elif current_signal_type == "BUY_SWING":
-                    rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)**"
-                    task_title = f"SWING: SPRAWDŹ {display_symbol}"
-                    msg = (
-                        f"{rodzaj}\n\n"
-                        f"🪙 **Moneta:** `{display_symbol}`\n"
-                        f"💰 **Cena:** `{display_price}`\n"
-                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
-                        f"💪 **Siła Wzgl. (BTC):** {'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}\n"
-                        f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}"
-                    )
-                elif current_signal_type == "SELL_TAKE_PROFIT":
-                    rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZACJA ZYSKU (TAKE PROFIT)**"
-                    task_title = f"TAKE PROFIT: {display_symbol} (RSI {rsi_4h_closed})"
-                    msg = (
-                        f"{rodzaj}\n\n"
-                        f"🪙 **Moneta:** `{display_symbol}`\n"
-                        f"💰 **Cena:** `{display_price}`\n"
-                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {sell_rsi_threshold}`\n"
-                        f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}"
-                    )
-                else: 
-                    rodzaj = "KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
-                    task_title = f"🔴 PILNE: SPRZEDAJ {display_symbol.upper()}"
-                    msg = (
-                        f"🔴 **{rodzaj}**\n\n"
-                        f"🔴 **MONETA: {display_symbol.upper()}**\n"
-                        f"🔴 **CENA: {display_price.upper()}**\n"
-                        f"🔴 **RSI 4H: {rsi_4h_closed} (PRÓG: {sell_rsi_threshold})**\n"
-                        f"🔴 **TREND 1D: SPADKOWY**"
-                    )
+                    send_telegram(body)
+                    add_to_tasks(title, body.replace('**', '').replace('`', ''))
+                    
+                    if sheet: 
+                        try: sheet.append_row([now_str, ticker, price_display, rsi_4h, rsi_1d, signal])
+                        except: pass
+                        
+                    cache[ticker] = {"signal": signal, "date": today_str}
 
-                send_telegram_alert(msg)
-                add_to_tasks(task_title, msg.replace('**', ''))
-
-            cache[symbol] = {"ts": ts_closed, "signal": signal_to_save, "last_digest_date": cached_data.get("last_digest_date", "")}
         except Exception as e:
-            print(f"❌ Błąd dla {symbol}: {e}")
+            print(f"Błąd {ticker}: {e}")
 
-    any_cache_date = ""
-    for v in cache.values():
-        if isinstance(v, dict) and "last_digest_date" in v:
-            any_cache_date = v["last_digest_date"]
-            break
-            
-    if any_cache_date != today_str and digest_lines:
-        digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines)
-        send_telegram_alert(digest_msg)
-        add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
-        
-        for sym in cache: 
-            cache[sym]["last_digest_date"] = today_str
+    # Podsumowanie dzienne (po 21:00 UK)
+    if uk_now.hour >= 21 and cache.get("DIGEST_DATE") != today_str:
+        if digest_lines:
+            digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (AKCJE)**\n\n" + "".join(digest_lines)
+            send_telegram(digest_msg)
+            add_to_tasks(f"Podsumowanie Akcji ({today_str})", digest_msg.replace('**', '').replace('`', ''))
+            cache["DIGEST_DATE"] = today_str
 
     with open(CACHE_FILE, "w") as f: json.dump(cache, f)
 
 if __name__ == "__main__":
     main()
-        
+            
