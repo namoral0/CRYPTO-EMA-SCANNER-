@@ -255,7 +255,7 @@ def main():
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}"
                     )
                 elif current_signal_type == "SELL_TAKE_PROFIT":
-                    rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZACJA ZYSKU (TAKE PROFIT)**"
+                    rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZUJ ZYSKI (TAKE PROFIT)**"
                     task_title = f"TAKE PROFIT: {display_symbol} (RSI {rsi_4h_closed})"
                     msg = (
                         f"{rodzaj}\n\n"
