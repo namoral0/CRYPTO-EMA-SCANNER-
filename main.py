@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 try:
@@ -29,7 +29,10 @@ CACHE_FILE = "cache.json"
 def send_telegram_alert(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    try:
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
+    except Exception as e:
+        print(f"❌ Nie udało się wysłać wiadomości na Telegram: {e}")
 
 def add_to_tasks(title, notes):
     if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS: return
@@ -42,7 +45,6 @@ def add_to_tasks(title, notes):
         print(f"❌ Błąd Tasks: {e}")
 
 def main():
-    # 1. Definicja czasu UK
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
     
@@ -65,10 +67,12 @@ def main():
         ticker_gbp = exchange.fetch_ticker("GBP/USD")
         if ticker_gbp and ticker_gbp.get('last'):
             usd_gbp_rate = 1.0 / ticker_gbp['last']
-    except: pass
+    except Exception as e:
+        send_telegram_alert(f"⚠️ **Ostrzeżenie API:** Problem z kursem GBP/USD (`{str(e)}`). Użyto kursu domyślnego 0.78.")
 
     digest_lines = []
     btc_data_cache = {}
+    pending_alerts = []
 
     for symbol in SYMBOLS:
         try:
@@ -271,21 +275,38 @@ def main():
                         f"🔴 **TREND 1D: SPADKOWY**"
                     )
 
-                send_telegram_alert(msg)
-                add_to_tasks(task_title, msg.replace('**', ''))
+                pending_alerts.append((task_title, msg, display_symbol, status_txt))
 
             cache[symbol] = {"ts": ts_closed, "signal": signal_to_save, "last_digest_date": cached_data.get("last_digest_date", "")}
+        
         except Exception as e:
-            print(f"❌ Błąd dla {symbol}: {e}")
+            err_msg = f"⚠️ **Błąd skanera dla {symbol}:** `{str(e)}`"
+            print(err_msg)
+            send_telegram_alert(err_msg)
 
-    # 2. Blokada przed wysyłaniem podsumowań rano
+    # --- WYSYŁANIE ALERTÓW (Z FILTREM LAWINOWYM) ---
+    if pending_alerts:
+        if len(pending_alerts) <= 3:
+            for task_title, msg, _, _ in pending_alerts:
+                send_telegram_alert(msg)
+                add_to_tasks(task_title, msg.replace('**', ''))
+        else:
+            lawina_title = f"🚨 LAWINOWA ZMIANA NA RYNKU: {len(pending_alerts)} ALERTÓW!"
+            lawina_msg = f"⚠️ **ZMASOWANA ZMIANA STANU RYNKU ({len(pending_alerts)} MONET)**\n\nWygaszenie pojedynczych alertów – rynek reaguje grupowo:\n\n"
+            for _, _, sym, stat in pending_alerts:
+                lawina_msg += f"• **{sym}**: {stat}\n"
+            lawina_msg += "\n*Sprawdź szczegóły w aplikacji lub poczekaj na digest.*"
+            
+            send_telegram_alert(lawina_msg)
+            add_to_tasks(lawina_title, lawina_msg.replace('**', ''))
+
+    # Podsumowanie wyjdzie TYLKO gdy jest po 21:00 czasu UK i nie było dziś jeszcze wysłane
     any_cache_date = ""
     for v in cache.values():
         if isinstance(v, dict) and "last_digest_date" in v:
             any_cache_date = v["last_digest_date"]
             break
             
-    # Podsumowanie wyjdzie TYLKO gdy jest po 21:00 czasu UK i nie było dziś jeszcze wysłane
     if uk_now.hour >= 21 and any_cache_date != today_str and digest_lines:
         digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines)
         send_telegram_alert(digest_msg)
@@ -297,5 +318,8 @@ def main():
     with open(CACHE_FILE, "w") as f: json.dump(cache, f)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        send_telegram_alert(f"🚨 **KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`")
             
