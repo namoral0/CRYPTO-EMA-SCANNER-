@@ -323,3 +323,4 @@ if __name__ == "__main__":
     except Exception as e:
         send_telegram_alert(f"🚨 **KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`")
             
+
