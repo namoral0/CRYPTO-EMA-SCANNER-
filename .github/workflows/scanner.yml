@@ -22,10 +22,10 @@ jobs:
         uses: actions/cache/restore@v4
         id: restore-cache
         with:
-          path: cache.json
-          key: crypto-cache-${{ github.run_id }}
+          path: cache_akcje.json
+          key: stock-cache-${{ github.run_id }}
           restore-keys: |
-            crypto-cache-
+            stock-cache-
 
       - name: Instalacja bibliotek
         run: |
@@ -44,6 +44,6 @@ jobs:
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: cache.json
-          key: crypto-cache-${{ github.run_id }}
+          path: cache_akcje.json
+          key: stock-cache-${{ github.run_id }}
           
