@@ -5,6 +5,7 @@ import requests
 import json
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 try:
     from google.oauth2.service_account import Credentials
@@ -41,6 +42,10 @@ def add_to_tasks(title, notes):
         print(f"❌ Błąd Tasks: {e}")
 
 def main():
+    # 1. Definicja czasu UK
+    uk_now = datetime.now(ZoneInfo("Europe/London"))
+    today_str = uk_now.strftime("%Y-%m-%d")
+    
     cache = {}
     if os.path.exists(CACHE_FILE):
         try:
@@ -62,7 +67,6 @@ def main():
             usd_gbp_rate = 1.0 / ticker_gbp['last']
     except: pass
 
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     digest_lines = []
     btc_data_cache = {}
 
@@ -158,13 +162,11 @@ def main():
                 display_price = f"£{close_closed:.4f}"
                 display_symbol = symbol
             
-            # --- ZAOSTROZONE PROGI WEJŚCIA DLA SATELIT ---
             base_buy, base_sell = (28, 70) if is_core else (22, 78)
             confirm_15m_buy, confirm_15m_sell = (38, 62) if is_core else (32, 68)
 
             volatility_multiplier = (bbw_closed / bbw_avg) if (not pd.isna(bbw_avg) and bbw_avg > 0) else 1.0
             
-            # Dolna granica RSI dla Satelit schodzi do 18 przy wysokiej zmienności
             min_buy_floor = 22 if is_core else 18
             buy_rsi_threshold = max(min_buy_floor, base_buy - 4) if volatility_multiplier > 1.3 else (min(33, base_buy + 3) if volatility_multiplier < 0.7 else base_buy)
             sell_rsi_threshold = min(82, base_sell + 3) if volatility_multiplier > 1.3 else (max(65, base_sell - 3) if volatility_multiplier < 0.7 else base_sell)
@@ -178,7 +180,6 @@ def main():
             is_oversold_4h = rsi_4h_closed <= buy_rsi_threshold
             is_overbought_4h = rsi_4h_closed >= sell_rsi_threshold
             
-            # DLA SATELIT: Wymagane głębokie RSI ORAZ (potwierdzenie 15m LUB wyjście poza dolną wstęgę BB)
             if is_core:
                 is_base_buy = ((is_oversold_4h and rsi_15m_live <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed)) and not is_anomaly_candle
             else:
@@ -277,13 +278,15 @@ def main():
         except Exception as e:
             print(f"❌ Błąd dla {symbol}: {e}")
 
+    # 2. Blokada przed wysyłaniem podsumowań rano
     any_cache_date = ""
     for v in cache.values():
         if isinstance(v, dict) and "last_digest_date" in v:
             any_cache_date = v["last_digest_date"]
             break
             
-    if any_cache_date != today_str and digest_lines:
+    # Podsumowanie wyjdzie TYLKO gdy jest po 21:00 czasu UK i nie było dziś jeszcze wysłane
+    if uk_now.hour >= 21 and any_cache_date != today_str and digest_lines:
         digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines)
         send_telegram_alert(digest_msg)
         add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
@@ -295,4 +298,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
+            
