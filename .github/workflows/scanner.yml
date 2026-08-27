@@ -4,14 +4,11 @@ on:
   schedule:
     # Skanowanie co 15 minut, 24/7
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Umożliwia także ręczne uruchomienie przyciskiem w GitHub Actions
+  workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Uprawnienie do zapisywania zmian w cache.json
-
     steps:
       - name: Pobranie kodu z repozytorium
         uses: actions/checkout@v4
@@ -20,6 +17,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Przywrócenie pamięci (cache.json)
+        uses: actions/cache/restore@v4
+        id: restore-cache
+        with:
+          path: cache.json
+          key: crypto-cache-${{ github.run_id }}
+          restore-keys: |
+            crypto-cache-
 
       - name: Instalacja bibliotek
         run: |
@@ -34,11 +40,10 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: python main.py
 
-      - name: Zapisanie stanu pamięci (cache.json)
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add cache.json
-          git commit -m "Aktualizacja cache.json [skip ci]" || exit 0
-          git push
+      - name: Zapisanie pamięci (cache.json)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: cache.json
+          key: crypto-cache-${{ github.run_id }}
           
