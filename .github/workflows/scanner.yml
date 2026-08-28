@@ -16,7 +16,7 @@ jobs:
       - name: Instalacja środowiska Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Instalacja bibliotek
         run: |
@@ -30,7 +30,7 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
         run: |
-          python skaner_krypto.py
+          python main.py
 
       - name: Zapisanie pamięci cache w repozytorium
         run: |
