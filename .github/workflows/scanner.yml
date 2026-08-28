@@ -16,17 +16,33 @@ jobs:
       - name: Instalacja środowiska Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
+
+      - name: Przywrócenie pamięci (cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: cache.json
+          key: crypto-cache-${{ github.run_id }}
+          restore-keys: |
+            crypto-cache-
 
       - name: Instalacja bibliotek
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install ccxt pandas requests google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2; fi
 
       - name: Uruchomienie skanera krypto
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
         run: |
           python main.py
+
+      - name: Zapisanie pamięci (cache)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: cache.json
+          key: crypto-cache-${{ github.run_id }}
           
