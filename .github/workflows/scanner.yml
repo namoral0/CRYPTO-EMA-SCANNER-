@@ -1,8 +1,13 @@
 name: Krypto Skaner 24/7
 
 on:
+  # Pozwala na zewnętrze wywołanie co 15 minut z idealną punktualnością
+  repository_dispatch:
+    types: [run-krypto]
+  
   schedule:
     - cron: '*/15 * * * *'
+    
   workflow_dispatch:
 
 jobs:
@@ -16,7 +21,7 @@ jobs:
       - name: Instalacja środowiska Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.10'
 
       - name: Przywrócenie pamięci (cache)
         uses: actions/cache/restore@v4
