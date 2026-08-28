@@ -3,13 +3,20 @@ import json
 import os
 import time
 from zoneinfo import ZoneInfo
-import gspread
 import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+
+# Opcjonalne importy Google — zabezpieczenie przed brakiem pakietu w środowisku
+try:
+  import gspread
+  from google.oauth2.service_account import Credentials
+  from googleapiclient.discovery import build
+
+  GOOGLE_MODULES_INSTALLED = True
+except ImportError:
+  GOOGLE_MODULES_INSTALLED = False
 
 # --- KONFIGURACJA ZMIENNYCH ŚRODOWISKOWYCH ---
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -18,7 +25,7 @@ SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 GOOGLE_TASKS_CREDENTIALS = os.getenv('GOOGLE_TASKS_CREDENTIALS')
 
 CORE_CRYPTO = ['BTC-GBP', 'ETH-GBP', 'SOL-GBP']
-SATELLITE_CRYPTO = ['FET-EUR', 'ALGO-EUR']
+SATELLITE_CRYPTO = ['ALGO-USD']
 TICKERS = CORE_CRYPTO + SATELLITE_CRYPTO
 CACHE_FILE = 'cache_krypto.json'
 
@@ -59,7 +66,6 @@ def detect_rsi_divergence(df_4h, window=25):
   older_min_idx = older_closes.idxmin()
   older_rsi = older_rsis.loc[older_min_idx]
 
-  # Bycza Dywergencja: Nowy dołek cenowy, ale RSI wyższe o min. 2.0 pkt
   if recent_min_price < older_min_price and recent_rsi > (older_rsi + 2.0):
     return True
   return False
@@ -83,7 +89,11 @@ def send_telegram(message):
 
 
 def get_google_sheet():
-  if not GOOGLE_TASKS_CREDENTIALS or not SPREADSHEET_ID:
+  if (
+      not GOOGLE_MODULES_INSTALLED
+      or not GOOGLE_TASKS_CREDENTIALS
+      or not SPREADSHEET_ID
+  ):
     return None
   try:
     creds = Credentials.from_service_account_info(
@@ -92,12 +102,12 @@ def get_google_sheet():
     )
     return gspread.authorize(creds).open_by_key(SPREADSHEET_ID).sheet1
   except Exception as e:
-    print(f'❌ Błąd autoryzacji Google Sheets: {e}')
+    print(f'⚠️ Pomijam Google Sheets: {e}')
     return None
 
 
 def add_to_tasks(title, notes):
-  if not GOOGLE_TASKS_CREDENTIALS:
+  if not GOOGLE_MODULES_INSTALLED or not GOOGLE_TASKS_CREDENTIALS:
     return
   try:
     creds = Credentials.from_service_account_info(
@@ -108,7 +118,7 @@ def add_to_tasks(title, notes):
         tasklist='@default', body={'title': title, 'notes': notes}
     ).execute()
   except Exception as e:
-    print(f'❌ Błąd Tasks: {e}')
+    print(f'⚠️ Pomijam Google Tasks: {e}')
 
 
 def main():
@@ -126,7 +136,6 @@ def main():
 
   sheet = get_google_sheet()
 
-  # Wskaźnik referencyjny BTC do badania Siły Względnej (RS vs BTC)
   btc_perf_24h = 0.0
   try:
     btc_hist = yf.Ticker('BTC-GBP').history(period='5d', interval='1d')
@@ -144,7 +153,7 @@ def main():
     try:
       time.sleep(1.2)
       is_core = ticker in CORE_CRYPTO
-      symbol_native = '£' if ticker.endswith('-GBP') else '€'
+      symbol_native = '£' if ticker.endswith('-GBP') else '$'
 
       crypto_icon = '🪙' if is_core else '🛰️'
       clean_name = ticker.replace('-', '/')
@@ -153,12 +162,12 @@ def main():
       stock = yf.Ticker(ticker)
 
       # =========================================================================
-      # KROK 1: ANALIZA MAKRO (1D) — TREND, ATR, BOLINGER, STREFI WSPARCIA
+      # KROK 1: ANALIZA MAKRO (1D)
       # =========================================================================
       df_1d = stock.history(period='1y', interval='1d').ffill()
       if df_1d.empty:
-          continue
-          
+        continue
+
       clean_1d_close = df_1d['Close'].dropna()
       if len(clean_1d_close) < 50:
         continue
@@ -170,7 +179,11 @@ def main():
       except Exception:
         price_native = clean_1d_close.iloc[-1]
 
-      price_display = f'{symbol_native}{price_native:.4f}' if price_native < 1 else f'{symbol_native}{price_native:.2f}'
+      price_display = (
+          f'{symbol_native}{price_native:.4f}'
+          if price_native < 1
+          else f'{symbol_native}{price_native:.2f}'
+      )
 
       high_52w = df_1d['High'].dropna().max()
       drawdown_pct = (
@@ -183,7 +196,6 @@ def main():
       is_uptrend_1d = price_native > ema200_1d
       rsi_1d = calculate_rsi(clean_1d_close)
 
-      # Zmienność i Wstęgi Bollingera (BBW)
       df_1d['BB_mid'] = clean_1d_close.rolling(window=20).mean()
       df_1d['BB_std'] = clean_1d_close.rolling(window=20).std()
       df_1d['BBW'] = (
@@ -191,25 +203,20 @@ def main():
           + (df_1d['BB_std'] * 2)
           - (df_1d['BB_mid'] - (df_1d['BB_std'] * 2))
       ) / df_1d['BB_mid']
-      
+
       valid_bbw = df_1d['BBW'].dropna()
       bbw_avg = (
           valid_bbw.rolling(window=20).mean().iloc[-1]
           if len(valid_bbw) >= 20
           else 1.0
       )
-      bbw_current = (
-          valid_bbw.iloc[-1]
-          if len(valid_bbw) > 0
-          else 1.0
-      )
+      bbw_current = valid_bbw.iloc[-1] if len(valid_bbw) > 0 else 1.0
       vol_mult = (
           (bbw_current / bbw_avg)
           if (not pd.isna(bbw_avg) and bbw_avg > 0)
           else 1.0
       )
 
-      # ATR & Anomaly Detection
       true_range = pd.concat(
           [
               df_1d['High'] - df_1d['Low'],
@@ -220,44 +227,48 @@ def main():
       ).max(axis=1)
       df_1d['ATR'] = true_range.rolling(window=14).mean()
       df_1d['ATR_MA'] = df_1d['ATR'].rolling(window=20).mean()
-      
-      atr_current = df_1d['ATR'].iloc[-1] if not pd.isna(df_1d['ATR'].iloc[-1]) else 0
-      atr_ma_current = df_1d['ATR_MA'].iloc[-1] if not pd.isna(df_1d['ATR_MA'].iloc[-1]) else 0
-      
-      is_anomaly = (
-          (atr_current > (atr_ma_current * 2.5))
-          if atr_ma_current > 0
-          else False
+
+      atr_current = (
+          df_1d['ATR'].iloc[-1] if not pd.isna(df_1d['ATR'].iloc[-1]) else 0
+      )
+      atr_ma_current = (
+          df_1d['ATR_MA'].iloc[-1]
+          if not pd.isna(df_1d['ATR_MA'].iloc[-1])
+          else 0
       )
 
-      # WSPARCIE 1W (Tygodniowy Bollinger Lower)
+      is_anomaly = (
+          (atr_current > (atr_ma_current * 2.5)) if atr_ma_current > 0 else False
+      )
+
       bb_1w_val = None
       bb_1w_msg = '📐 **Wsparcie 1W:** `Brak danych`'
       try:
         df_1w = stock.history(period='2y', interval='1wk').ffill()
         if not df_1w.empty:
-            clean_1w = df_1w['Close'].dropna()
-            if len(clean_1w) >= 21:
-              closed_1w = clean_1w.iloc[:-1]
-              bb_1w_val = (
-                  closed_1w.rolling(20).mean().iloc[-1]
-                  - (closed_1w.rolling(20).std().iloc[-1] * 2)
+          clean_1w = df_1w['Close'].dropna()
+          if len(clean_1w) >= 21:
+            closed_1w = clean_1w.iloc[:-1]
+            bb_1w_val = (
+                closed_1w.rolling(20).mean().iloc[-1]
+                - (closed_1w.rolling(20).std().iloc[-1] * 2)
+            )
+            if not pd.isna(bb_1w_val):
+              dist = (
+                  round(((bb_1w_val - price_native) / price_native) * 100, 1)
+                  if price_native > 0
+                  else 0
               )
-              if not pd.isna(bb_1w_val):
-                dist = (
-                    round(((bb_1w_val - price_native) / price_native) * 100, 1)
-                    if price_native > 0
-                    else 0
-                )
-                val_fmt = f'{bb_1w_val:.4f}' if bb_1w_val < 1 else f'{bb_1w_val:.2f}'
-                bb_1w_msg = (
-                    f'📐 **Wsparcie 1W (BB):** `{symbol_native}{val_fmt}`\n📉'
-                    f' **Dystans do 1W:** `{dist}%`'
-                )
+              val_fmt = (
+                  f'{bb_1w_val:.4f}' if bb_1w_val < 1 else f'{bb_1w_val:.2f}'
+              )
+              bb_1w_msg = (
+                  f'📐 **Wsparcie 1W (BB):** `{symbol_native}{val_fmt}`\n📉'
+                  f' **Dystans do 1W:** `{dist}%`'
+              )
       except Exception as e:
         print(f'⚠️ Problem z interwałem 1W dla {ticker}: {e}')
 
-      # WYKRYWANIE TWARDEJ STREFY WSPARCIA (Wsparcie w zasięgu <= 2.5%)
       near_supports = []
       if not pd.isna(ema200_1d) and ema200_1d > 0:
         if abs(price_native - ema200_1d) / price_native <= 0.025:
@@ -273,7 +284,6 @@ def main():
       is_near_support = len(near_supports) > 0
       support_txt = ', '.join(near_supports) if is_near_support else 'Brak'
 
-      # Siła względna względem BTC (dla Satelitów)
       is_rs_vs_btc = False
       if not is_core and len(clean_1d_close) >= 2:
         token_perf_24h = (
@@ -284,7 +294,7 @@ def main():
           is_rs_vs_btc = True
 
       # =========================================================================
-      # KROK 2: ANALIZA MIKRO (4H) — DYWERGENCJA 24/7, PINBAR I TRIGGER
+      # KROK 2: ANALIZA MIKRO (4H)
       # =========================================================================
       df_1h = stock.history(period='1mo', interval='1h').ffill()
       rsi_4h = 50.0
@@ -292,7 +302,6 @@ def main():
       is_pinbar = False
 
       if not df_1h.empty and len(df_1h) > 50:
-        # Całodobowe resamplowanie do świec 4H (Krypto działa 24/7)
         df_4h_df = (
             df_1h.resample('4h')
             .agg({
@@ -319,7 +328,6 @@ def main():
           rsi_4h = df_4h_df['RSI'].iloc[-1]
           is_rsi_div = detect_rsi_divergence(df_4h_df)
 
-        # Weryfikacja Knotu Popytowego (Pinbar 4H)
         last_open = df_1h['Open'].iloc[-1]
         last_high = df_1h['High'].iloc[-1]
         last_low = df_1h['Low'].iloc[-1]
@@ -330,7 +338,7 @@ def main():
             is_pinbar = True
 
       # =========================================================================
-      # KROK 3: KWALIFIKACJA SYGNAŁU (LOGIKA MULTI-FACTOR KRYPTO)
+      # KROK 3: KWALIFIKACJA SYGNAŁU
       # =========================================================================
       if is_core:
         base_buy_thr = 36
@@ -362,7 +370,6 @@ def main():
         else:
           signal = 'WYPRZEDANIE_ZOLTE'
 
-      # Formatowanie tagów statusu
       status_tag = []
       if is_rsi_div:
         status_tag.append('🎯 DYWERGENCJA')
@@ -388,7 +395,7 @@ def main():
       )
 
       # =========================================================================
-      # KROK 4: WYSYŁANIE ALERTÓW (NATYCHMIAST 24/7)
+      # KROK 4: WYSYŁANIE ALERTÓW
       # =========================================================================
       last_sig = cache.get(ticker, {}).get('signal', 'NONE')
       last_date = cache.get(ticker, {}).get('date', '')
@@ -487,3 +494,4 @@ if __name__ == '__main__':
   except Exception as e:
     send_telegram(f'🚨 **KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`')
     raise e
+      
