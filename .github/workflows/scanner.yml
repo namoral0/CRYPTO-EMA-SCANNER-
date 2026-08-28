@@ -1,13 +1,10 @@
 name: Krypto Skaner 24/7
 
 on:
-  # Pozwala na zewnętrze wywołanie co 15 minut z idealną punktualnością
   repository_dispatch:
     types: [run-krypto]
-  
   schedule:
     - cron: '*/15 * * * *'
-    
   workflow_dispatch:
 
 jobs:
