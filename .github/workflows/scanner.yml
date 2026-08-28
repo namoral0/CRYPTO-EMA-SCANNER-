@@ -1,9 +1,12 @@
-name: Krypto Skaner 24/7
+name: Skaner Akcji
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Uruchamianie co 15 minut 24/7
-  workflow_dispatch:        # Możliwość ręcznego uruchomienia
+    - cron: '*/15 8-21 * * 1-5'  # Od poniedziałku do piątku w godzinach giełdowych
+  workflow_dispatch:
+
+permissions:
+  contents: write  # Dostęp do zapisu pliku cache w repozytorium
 
 jobs:
   skaner:
@@ -16,26 +19,26 @@ jobs:
       - name: Instalacja środowiska Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Instalacja bibliotek
         run: |
           python -m pip install --upgrade pip
           pip install requests yfinance pandas numpy gspread google-api-python-client google-auth
 
-      - name: Uruchomienie skanera krypto
+      - name: Uruchomienie skanera akcji
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
         run: |
-          python main.py
+          python skaner.py
 
       - name: Zapisanie pamięci cache w repozytorium
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add cache_krypto.json
-          git commit -m "Aktualizacja cache_krypto.json [skip ci]" || exit 0
+          git add cache_akcje.json
+          git commit -m "Aktualizacja cache_akcje.json [skip ci]" || exit 0
           git push
