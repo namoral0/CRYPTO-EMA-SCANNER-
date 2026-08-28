@@ -14,7 +14,8 @@ try:
 except ImportError:
     HAS_GOOGLE = False
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Poprawka: Obsługa obu wariantów nazwy tokena z GitHub Secrets
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
@@ -244,7 +245,7 @@ def main():
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}"
                     )
                 elif current_signal_type == "BUY_SWING":
-                    rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)**"
+                    rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALny DOŁEK)**"
                     task_title = f"SWING: SPRAWDŹ {display_symbol}"
                     msg = (
                         f"{rodzaj}\n\n"
@@ -284,7 +285,6 @@ def main():
             print(err_msg)
             send_telegram_alert(err_msg)
 
-    # --- WYSYŁANIE ALERTÓW (Z FILTREM LAWINOWYM) ---
     if pending_alerts:
         if len(pending_alerts) <= 3:
             for task_title, msg, _, _ in pending_alerts:
@@ -300,7 +300,6 @@ def main():
             send_telegram_alert(lawina_msg)
             add_to_tasks(lawina_title, lawina_msg.replace('**', ''))
 
-    # Podsumowanie wyjdzie TYLKO gdy jest po 21:00 czasu UK i nie było dziś jeszcze wysłane
     any_cache_date = ""
     for v in cache.values():
         if isinstance(v, dict) and "last_digest_date" in v:
@@ -321,6 +320,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        send_telegram_alert(f"🚨 **KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`")
-            
-
+        send_telegram_alert(f"🚨 **KRYTYCZNY BŁĄD SKANER KRYPTO:**\n`{str(e)}`")
+        
