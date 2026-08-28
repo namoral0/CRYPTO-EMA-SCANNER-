@@ -161,7 +161,7 @@ def main():
             
             if symbol.endswith("/USD"):
                 price_gbp = close_closed * usd_gbp_rate
-                display_price = f"${close_closed:.4f} (£{price_gbp:.4f})"
+                display_price = f"£{price_gbp:.4f}"
                 display_symbol = symbol 
             else:
                 display_price = f"£{close_closed:.4f}"
@@ -321,4 +321,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         send_telegram_alert(f"🚨 **KRYTYCZNY BŁĄD SKANER KRYPTO:**\n`{str(e)}`")
-        
+        raise e
