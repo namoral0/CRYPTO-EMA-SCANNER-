@@ -18,7 +18,7 @@ SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 GOOGLE_TASKS_CREDENTIALS = os.getenv('GOOGLE_TASKS_CREDENTIALS')
 
 CORE_CRYPTO = ['BTC-GBP', 'ETH-GBP', 'SOL-GBP']
-SATELLITE_CRYPTO = ['FET-USD', 'ALGO-USD']
+SATELLITE_CRYPTO = ['FET-EUR', 'ALGO-EUR']
 TICKERS = CORE_CRYPTO + SATELLITE_CRYPTO
 CACHE_FILE = 'cache_krypto.json'
 
@@ -91,7 +91,8 @@ def get_google_sheet():
         scopes=['https://www.googleapis.com/auth/spreadsheets'],
     )
     return gspread.authorize(creds).open_by_key(SPREADSHEET_ID).sheet1
-  except Exception:
+  except Exception as e:
+    print(f'❌ Błąd autoryzacji Google Sheets: {e}')
     return None
 
 
@@ -120,8 +121,8 @@ def main():
     try:
       with open(CACHE_FILE, 'r') as f:
         cache = json.load(f)
-    except Exception:
-      pass
+    except Exception as e:
+      print(f'⚠️ Błąd odczytu pliku cache: {e}')
 
   sheet = get_google_sheet()
 
@@ -129,7 +130,7 @@ def main():
   btc_perf_24h = 0.0
   try:
     btc_hist = yf.Ticker('BTC-GBP').history(period='5d', interval='1d')
-    if len(btc_hist) >= 2:
+    if not btc_hist.empty and len(btc_hist) >= 2:
       btc_perf_24h = (
           (btc_hist['Close'].iloc[-1] - btc_hist['Close'].iloc[-2])
           / btc_hist['Close'].iloc[-2]
@@ -143,7 +144,7 @@ def main():
     try:
       time.sleep(1.2)
       is_core = ticker in CORE_CRYPTO
-      symbol_native = '£' if ticker.endswith('-GBP') else '$'
+      symbol_native = '£' if ticker.endswith('-GBP') else '€'
 
       crypto_icon = '🪙' if is_core else '🛰️'
       clean_name = ticker.replace('-', '/')
@@ -155,6 +156,9 @@ def main():
       # KROK 1: ANALIZA MAKRO (1D) — TREND, ATR, BOLINGER, STREFI WSPARCIA
       # =========================================================================
       df_1d = stock.history(period='1y', interval='1d').ffill()
+      if df_1d.empty:
+          continue
+          
       clean_1d_close = df_1d['Close'].dropna()
       if len(clean_1d_close) < 50:
         continue
@@ -187,14 +191,16 @@ def main():
           + (df_1d['BB_std'] * 2)
           - (df_1d['BB_mid'] - (df_1d['BB_std'] * 2))
       ) / df_1d['BB_mid']
+      
+      valid_bbw = df_1d['BBW'].dropna()
       bbw_avg = (
-          df_1d['BBW'].dropna().rolling(window=20).mean().iloc[-1]
-          if len(df_1d['BBW'].dropna()) >= 20
+          valid_bbw.rolling(window=20).mean().iloc[-1]
+          if len(valid_bbw) >= 20
           else 1.0
       )
       bbw_current = (
-          df_1d['BBW'].dropna().iloc[-1]
-          if len(df_1d['BBW'].dropna()) > 0
+          valid_bbw.iloc[-1]
+          if len(valid_bbw) > 0
           else 1.0
       )
       vol_mult = (
@@ -214,11 +220,13 @@ def main():
       ).max(axis=1)
       df_1d['ATR'] = true_range.rolling(window=14).mean()
       df_1d['ATR_MA'] = df_1d['ATR'].rolling(window=20).mean()
-      atr_current = df_1d['ATR'].iloc[-1]
-      atr_ma_current = df_1d['ATR_MA'].iloc[-1]
+      
+      atr_current = df_1d['ATR'].iloc[-1] if not pd.isna(df_1d['ATR'].iloc[-1]) else 0
+      atr_ma_current = df_1d['ATR_MA'].iloc[-1] if not pd.isna(df_1d['ATR_MA'].iloc[-1]) else 0
+      
       is_anomaly = (
           (atr_current > (atr_ma_current * 2.5))
-          if not pd.isna(atr_ma_current) and atr_ma_current > 0
+          if atr_ma_current > 0
           else False
       )
 
@@ -227,26 +235,27 @@ def main():
       bb_1w_msg = '📐 **Wsparcie 1W:** `Brak danych`'
       try:
         df_1w = stock.history(period='2y', interval='1wk').ffill()
-        clean_1w = df_1w['Close'].dropna()
-        if len(clean_1w) >= 21:
-          closed_1w = clean_1w.iloc[:-1]
-          bb_1w_val = (
-              closed_1w.rolling(20).mean().iloc[-1]
-              - (closed_1w.rolling(20).std().iloc[-1] * 2)
-          )
-          if not pd.isna(bb_1w_val):
-            dist = (
-                round(((bb_1w_val - price_native) / price_native) * 100, 1)
-                if price_native > 0
-                else 0
-            )
-            val_fmt = f'{bb_1w_val:.4f}' if bb_1w_val < 1 else f'{bb_1w_val:.2f}'
-            bb_1w_msg = (
-                f'📐 **Wsparcie 1W (BB):** `{symbol_native}{val_fmt}`\n📉'
-                f' **Dystans do 1W:** `{dist}%`'
-            )
-      except:
-        pass
+        if not df_1w.empty:
+            clean_1w = df_1w['Close'].dropna()
+            if len(clean_1w) >= 21:
+              closed_1w = clean_1w.iloc[:-1]
+              bb_1w_val = (
+                  closed_1w.rolling(20).mean().iloc[-1]
+                  - (closed_1w.rolling(20).std().iloc[-1] * 2)
+              )
+              if not pd.isna(bb_1w_val):
+                dist = (
+                    round(((bb_1w_val - price_native) / price_native) * 100, 1)
+                    if price_native > 0
+                    else 0
+                )
+                val_fmt = f'{bb_1w_val:.4f}' if bb_1w_val < 1 else f'{bb_1w_val:.2f}'
+                bb_1w_msg = (
+                    f'📐 **Wsparcie 1W (BB):** `{symbol_native}{val_fmt}`\n📉'
+                    f' **Dystans do 1W:** `{dist}%`'
+                )
+      except Exception as e:
+        print(f'⚠️ Problem z interwałem 1W dla {ticker}: {e}')
 
       # WYKRYWANIE TWARDEJ STREFY WSPARCIA (Wsparcie w zasięgu <= 2.5%)
       near_supports = []
@@ -282,7 +291,7 @@ def main():
       is_rsi_div = False
       is_pinbar = False
 
-      if len(df_1h) > 50:
+      if not df_1h.empty and len(df_1h) > 50:
         # Całodobowe resamplowanie do świec 4H (Krypto działa 24/7)
         df_4h_df = (
             df_1h.resample('4h')
@@ -445,8 +454,8 @@ def main():
             sheet.append_row(
                 [now_str, ticker, price_display, rsi_4h, rsi_1d, signal]
             )
-          except:
-            pass
+          except Exception as e:
+            print(f'⚠️ Błąd zapisu do Google Sheets dla {ticker}: {e}')
 
         cache[ticker] = {'signal': signal, 'date': today_str}
 
