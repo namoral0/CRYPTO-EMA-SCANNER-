@@ -42,3 +42,4 @@ jobs:
           git commit -m "Aktualizacja cache.json [skip ci]" || exit 0
           git pull --rebase -X ours origin main
           git push origin main
+
