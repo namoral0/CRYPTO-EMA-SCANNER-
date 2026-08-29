@@ -288,6 +288,9 @@ def main():
             digest_lines.append(f"🪙 **{display_symbol}** — {display_price}\n  └ RSI: {rsi_4h_closed} | ADX: {round(adx_closed,1)} | Trend: {trend_txt} | Stan: {status_txt}\n")
 
             cached_data = cache.get(symbol, {})
+            if not isinstance(cached_data, dict):
+                cached_data = {}
+
             last_ts = cached_data.get("ts", 0)
             last_signal = cached_data.get("signal", "NONE")
 
@@ -356,12 +359,12 @@ def main():
 
                 pending_alerts.append((task_title, msg, display_symbol, status_txt))
 
-            cache[symbol] = {"ts": ts_closed, "signal": signal_to_save, "last_digest_date": cached_data.get("last_digest_date", "")}
+            cache[symbol] = {"ts": ts_closed, "signal": signal_to_save}
         
         except Exception as e:
             logging.error(f"Błąd skanera dla {symbol}: {e}")
 
-    # Bezpieczna, sekwencyjna wysyłka powiadomień
+    # Sekwencyjna wysyłka powiadomień
     if pending_alerts:
         if len(pending_alerts) <= 3:
             for task_title, msg, _, _ in pending_alerts:
@@ -377,20 +380,13 @@ def main():
             send_telegram_alert(lawina_msg)
             add_to_tasks(lawina_title, lawina_msg.replace('**', ''))
 
-    any_cache_date = ""
-    for v in cache.values():
-        if isinstance(v, dict) and "last_digest_date" in v:
-            any_cache_date = v["last_digest_date"]
-            break
-            
-    if uk_now.hour >= 21 and any_cache_date != today_str and digest_lines:
-        digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines)
-        send_telegram_alert(digest_msg)
-        add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
-        
-        for sym in cache: 
-            if isinstance(cache[sym], dict):
-                cache[sym]["last_digest_date"] = today_str
+    # Niezawodne wysyłanie codziennego podsumowania (po godz. 21:00 raz na dobę)
+    if uk_now.hour >= 21 and cache.get("DIGEST_DATE") != today_str:
+        if digest_lines:
+            digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines)
+            send_telegram_alert(digest_msg)
+            add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
+            cache["DIGEST_DATE"] = today_str
 
     save_cache(cache)
     elapsed = round(time.time() - start_time, 2)
