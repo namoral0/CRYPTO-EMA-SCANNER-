@@ -21,11 +21,10 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
-    "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
-    "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/USD", "NEAR/USD",
-    "TAO/USD", "RENDER/USD"
+    "TAO/GBP", "BTC/GBP", "ETH/GBP", "ONDO/GBP", "SOL/GBP", 
+    "XRP/GBP", "RENDER/GBP", "SUI/GBP", "LINK/GBP", "AAVE/GBP"
 ]
-CACHE_FILE = "cache.json"
+CACHE_FILE = "cache_krypto.json"
 
 def send_telegram_alert(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -65,15 +64,7 @@ def main():
             pass
     
     exchange = ccxt.kraken({'enableRateLimit': True})
-    usd_gbp_rate = 0.78
     
-    try:
-        ticker_gbp = exchange.fetch_ticker("GBP/USD")
-        if ticker_gbp and ticker_gbp.get('last'):
-            usd_gbp_rate = 1.0 / ticker_gbp['last']
-    except Exception as e:
-        send_telegram_alert(f"⚠️ **Ostrzeżenie API:** Problem z kursem GBP/USD (`{str(e)}`). Użyto kursu domyślnego 0.78.")
-
     digest_lines = []
     btc_data_cache = {}
     pending_alerts = []
@@ -164,13 +155,8 @@ def main():
             is_volume_spike = vol_multiplier > 1.4
             is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
             
-            if symbol.endswith("/USD"):
-                price_gbp = close_closed * usd_gbp_rate
-                display_price = f"£{price_gbp:.4f}"
-                display_symbol = symbol 
-            else:
-                display_price = f"£{close_closed:.4f}"
-                display_symbol = symbol
+            display_price = f"£{close_closed:.4f}"
+            display_symbol = symbol
             
             base_buy, base_sell = (28, 70) if is_core else (22, 78)
             confirm_15m_buy, confirm_15m_sell = (38, 62) if is_core else (32, 68)
@@ -323,4 +309,3 @@ if __name__ == "__main__":
         send_telegram_alert(f"🚨 **🔴 KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`")
         add_to_tasks('KRYTYCZNY BŁĄD SKANERA KRYPTO', str(e))
         raise e
-
