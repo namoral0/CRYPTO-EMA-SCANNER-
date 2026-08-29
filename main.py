@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -80,7 +79,7 @@ def add_to_tasks(title, notes):
 # --- 4. GŁÓWNA PĘTLA APLIKACJI ---
 def main():
     start_time = time.time()
-    logging.info("Uruchamianie ekspresowego skanera Krypto (Kraken CCXT)...")
+    logging.info("Uruchamianie skanera Krypto (Kraken CCXT)...")
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
     
@@ -116,7 +115,7 @@ def main():
             df_4h_btc = btc_data_cache[btc_symbol]["4h"]
             df_1d_btc = btc_data_cache[btc_symbol]["1d"]
 
-            # --- POPRAWKA: BTC Macro Guard ---
+            # --- BTC Macro Guard ---
             btc_ema_200_1d = df_1d_btc['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             is_btc_macro_bullish = bool(df_1d_btc['close'].iloc[-1] > btc_ema_200_1d)
 
@@ -153,7 +152,7 @@ def main():
             df_4h['ATR_MA'] = df_4h['ATR'].rolling(window=20).mean()
             df_4h['Vol_MA'] = df_4h['v'].rolling(window=20).mean()
 
-            # --- POPRAWKA: Wskaźnik ADX (14) na ramie 4H ---
+            # --- Wskaźnik ADX (14) na ramie 4H ---
             plus_dm = df_4h['h'].diff()
             minus_dm = df_4h['l'].diff()
             plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
@@ -188,8 +187,6 @@ def main():
             df_15m['RSI'] = 100 - (100 / (1 + (gain_15m / loss_15m)))
 
             rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
-            
-            # --- POPRAWKA: Zamknięta świeca 15M (iloc[-2]) ---
             rsi_15m_closed = round(df_15m['RSI'].iloc[-2], 1)
             
             close_closed = df_4h['close'].iloc[-2]
@@ -204,13 +201,13 @@ def main():
             avg_vol = df_4h['Vol_MA'].iloc[-2]
             vol_multiplier = current_vol / avg_vol if not pd.isna(avg_vol) and avg_vol > 0 else 0
             
-            # --- POPRAWKA: Wolumen skokowy uznawany TYLKO przy zielonej świecy ---
+            # Wolumen skokowy uznawany TYLKO przy zielonej świecy
             is_green_candle_4h = df_4h['close'].iloc[-2] > df_4h['o'].iloc[-2]
             is_volume_spike = (vol_multiplier > 1.4) and is_green_candle_4h
             
             is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
             
-            # --- POPRAWKA: Dynamiczny TP (Trailing ATR w hossie vs BB Upper) ---
+            # Dynamiczny TP
             if is_uptrend_1d:
                 tp_target_raw = close_closed + (2.5 * atr_val)
             else:
@@ -260,7 +257,7 @@ def main():
             else:
                 is_base_buy = (is_oversold_4h and (rsi_15m_closed <= confirm_15m_buy or close_closed <= bb_lower_closed)) and not is_anomaly_candle
 
-            # FILTRY BEZPIECZEŃSTWA
+            # Filtry bezpieczeństwa
             if is_trending_4h and not is_uptrend_1d:
                 is_base_buy = False
 
@@ -364,22 +361,21 @@ def main():
         except Exception as e:
             logging.error(f"Błąd skanera dla {symbol}: {e}")
 
-    # Wielowątkowa wysyłka alertów do zewnętrznych API
+    # Bezpieczna, sekwencyjna wysyłka powiadomień
     if pending_alerts:
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            if len(pending_alerts) <= 3:
-                for task_title, msg, _, _ in pending_alerts:
-                    executor.submit(send_telegram_alert, msg)
-                    executor.submit(add_to_tasks, task_title, msg.replace('**', ''))
-            else:
-                lawina_title = f"🚨 LAWINOWA ZMIANA NA RYNKU: {len(pending_alerts)} ALERTÓW!"
-                lawina_msg = f"⚠️ **ZMASOWANA ZMIANA STANU RYNKU ({len(pending_alerts)} MONET)**\n\nWygaszenie pojedynczych alertów – rynek reaguje grupowo:\n\n"
-                for _, _, sym, stat in pending_alerts:
-                    lawina_msg += f"• **{sym}**: {stat}\n"
-                lawina_msg += "\n*Sprawdź szczegóły w aplikacji lub poczekaj na digest.*"
-                
-                executor.submit(send_telegram_alert, lawina_msg)
-                executor.submit(add_to_tasks, lawina_title, lawina_msg.replace('**', ''))
+        if len(pending_alerts) <= 3:
+            for task_title, msg, _, _ in pending_alerts:
+                send_telegram_alert(msg)
+                add_to_tasks(task_title, msg.replace('**', ''))
+        else:
+            lawina_title = f"🚨 LAWINOWA ZMIANA NA RYNKU: {len(pending_alerts)} ALERTÓW!"
+            lawina_msg = f"⚠️ **ZMASOWANA ZMIANA STANU RYNKU ({len(pending_alerts)} MONET)**\n\nWygaszenie pojedynczych alertów – rynek reaguje grupowo:\n\n"
+            for _, _, sym, stat in pending_alerts:
+                lawina_msg += f"• **{sym}**: {stat}\n"
+            lawina_msg += "\n*Sprawdź szczegóły w aplikacji lub poczekaj na digest.*"
+            
+            send_telegram_alert(lawina_msg)
+            add_to_tasks(lawina_title, lawina_msg.replace('**', ''))
 
     any_cache_date = ""
     for v in cache.values():
