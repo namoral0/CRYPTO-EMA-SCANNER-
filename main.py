@@ -11,7 +11,6 @@ import pandas as pd
 import requests
 import yfinance as yf
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
 
 # --- 1. KONFIGURACJA LOGOWANIA ---
 logging.basicConfig(
@@ -24,8 +23,7 @@ logging.basicConfig(
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
-GOOGLE_TASKS_CREDENTIALS = os.getenv('GOOGLE_TASKS_CREDENTIALS')
-GOOGLE_TASK_LIST_ID = os.getenv('GOOGLE_TASK_LIST_ID', '@default')
+GOOGLE_TASKS_CREDENTIALS = os.getenv('GOOGLE_TASKS_CREDENTIALS')  # Używane też do Google Sheets
 
 CORE_CRYPTO = ['BTC-GBP', 'ETH-GBP', 'SOL-GBP']
 SATELLITE_CRYPTO = [
@@ -82,23 +80,6 @@ def get_google_sheet():
     except Exception as e:
         logging.error(f'Błąd autoryzacji Google Sheets: {e}')
         return None
-
-def add_to_tasks(title, notes):
-    if not GOOGLE_TASKS_CREDENTIALS:
-        return
-    try:
-        creds = Credentials.from_service_account_info(
-            json.loads(GOOGLE_TASKS_CREDENTIALS),
-            scopes=['https://www.googleapis.com/auth/tasks'],
-        )
-        service = build('tasks', 'v1', credentials=creds)
-        service.tasks().insert(
-            tasklist=GOOGLE_TASK_LIST_ID, 
-            body={'title': title, 'notes': notes}
-        ).execute()
-        logging.info(f"Dodano zadanie do Google Tasks: {title}")
-    except Exception as e:
-        logging.error(f'Błąd podczas dodawania zadania do Google Tasks: {e}')
 
 def fetch_safe_history(ticker, period, interval):
     """Pobiera historię z yfinance, a przy braku danych GBP wykonuje fallback na USD."""
@@ -397,8 +378,8 @@ def process_single_ticker(ticker, btc_perf_24h, cache, sheet, today_str, now_str
         if signal != 'NONE' and (last_date != today_str or last_sig != signal):
             title, body = generate_alert_content(data)
             
+            # Główny kanał informacyjny: Telegram
             send_telegram(body)
-            add_to_tasks(title, body.replace('**', '').replace('`', ''))
 
             if sheet:
                 try:
@@ -439,12 +420,9 @@ def main():
         if digest_lines:
             digest_msg = '📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n' + ''.join(digest_lines)
             send_telegram(digest_msg)
-            add_to_tasks(f'Podsumowanie Krypto ({today_str})', digest_msg.replace('**', '').replace('`', ''))
-            
             cache['DIGEST_DATE'] = today_str
-            save_cache(cache)
-            logging.info("Wysłano codzienne podsumowanie.")
 
+    save_cache(cache)
     logging.info("Skaner zakończył działanie.")
 
 
@@ -455,5 +433,4 @@ if __name__ == '__main__':
         logging.critical(f"🚨 KRYTYCZNY BŁĄD SKANERA KRYPTO: {e}", exc_info=True)
         err_msg = f'🚨 **🔴 KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`'
         send_telegram(err_msg)
-        add_to_tasks('KRYTYCZNY BŁĄD SKANERA KRYPTO', err_msg)
         raise e
