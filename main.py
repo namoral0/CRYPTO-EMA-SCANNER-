@@ -21,10 +21,11 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
-    "TAO/USD", "BTC/GBP", "ETH/GBP", "ONDO/USD", "SOL/GBP", 
-    "XRP/GBP", "RENDER/USD", "SUI/GBP", "LINK/GBP", "AAVE/GBP"
+    "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
+    "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/USD", "NEAR/USD",
+    "TAO/USD", "RENDER/USD"
 ]
-CACHE_FILE = "cache_krypto.json"
+CACHE_FILE = "cache.json"
 
 def send_telegram_alert(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -64,7 +65,15 @@ def main():
             pass
     
     exchange = ccxt.kraken({'enableRateLimit': True})
+    usd_gbp_rate = 0.78
     
+    try:
+        ticker_gbp = exchange.fetch_ticker("GBP/USD")
+        if ticker_gbp and ticker_gbp.get('last'):
+            usd_gbp_rate = 1.0 / ticker_gbp['last']
+    except Exception as e:
+        send_telegram_alert(f"⚠️ **Ostrzeżenie API:** Problem z kursem GBP/USD (`{str(e)}`). Użyto kursu domyślnego 0.78.")
+
     digest_lines = []
     btc_data_cache = {}
     pending_alerts = []
@@ -146,6 +155,7 @@ def main():
             bb_upper_closed = df_4h['BB_upper'].iloc[-2]
             bb_lower_closed = df_4h['BB_lower'].iloc[-2]
             avg_atr = df_4h['ATR_MA'].iloc[-2]
+            atr_val = df_4h['ATR'].iloc[-2] if not pd.isna(df_4h['ATR'].iloc[-2]) else 0.0
             bbw_closed = df_4h['BBW'].iloc[-2]
             bbw_avg = df_4h['BBW_MA'].iloc[-2]
             
@@ -155,8 +165,21 @@ def main():
             is_volume_spike = vol_multiplier > 1.4
             is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
             
-            display_price = f"£{close_closed:.4f}"
-            display_symbol = symbol
+            if symbol.endswith("/USD"):
+                price_gbp = close_closed * usd_gbp_rate
+                display_price = f"£{price_gbp:.4f}"
+                display_symbol = symbol 
+                sl_calc = max(0, (close_closed - 1.5 * atr_val) * usd_gbp_rate)
+                tp_calc = bb_upper_closed * usd_gbp_rate
+                sl_str = f"£{sl_calc:.4f}"
+                tp_str = f"£{tp_calc:.4f}"
+            else:
+                display_price = f"£{close_closed:.4f}"
+                display_symbol = symbol
+                sl_calc = max(0, close_closed - 1.5 * atr_val)
+                tp_calc = bb_upper_closed
+                sl_str = f"£{sl_calc:.4f}"
+                tp_str = f"£{tp_calc:.4f}"
             
             base_buy, base_sell = (28, 70) if is_core else (22, 78)
             confirm_15m_buy, confirm_15m_sell = (38, 62) if is_core else (32, 68)
@@ -218,6 +241,10 @@ def main():
             signal_to_save = current_signal_type if current_signal_type != "NONE" else (last_signal if last_ts == ts_closed else "NONE")
 
             if should_alert:
+                base_asset, quote_asset = symbol.split('/')
+                tv_crypto_link = f"[📈 Wykres TradingView](https://www.tradingview.com/chart/?symbol=KRAKEN%3A{base_asset}{quote_asset})"
+                kraken_trade_link = f"[⚡️ Handluj na Kraken](https://pro.kraken.com/app/trade/{base_asset}-{quote_asset})"
+
                 if current_signal_type == "BUY_MEGA":
                     rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)**"
                     task_title = f"MEGA OKAZJA: KUP {display_symbol}"
@@ -227,7 +254,9 @@ def main():
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
                         f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n"
-                        f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}"
+                        f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}\n"
+                        f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
+                        f"🔗 {tv_crypto_link} | {kraken_trade_link}"
                     )
                 elif current_signal_type == "BUY_SWING":
                     rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)**"
@@ -238,7 +267,9 @@ def main():
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
                         f"💪 **Siła Wzgl. (BTC):** {'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}\n"
-                        f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}"
+                        f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}\n"
+                        f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
+                        f"🔗 {tv_crypto_link} | {kraken_trade_link}"
                     )
                 elif current_signal_type == "SELL_TAKE_PROFIT":
                     rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZUJ ZYSKI (TAKE PROFIT)**"
@@ -248,7 +279,8 @@ def main():
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {sell_rsi_threshold}`\n"
-                        f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}"
+                        f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n\n"
+                        f"🔗 {tv_crypto_link} | {kraken_trade_link}"
                     )
                 else: 
                     rodzaj = "🔴 KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
@@ -258,7 +290,8 @@ def main():
                         f"🔴 **MONETA: {display_symbol.upper()}**\n"
                         f"🔴 **CENA: {display_price.upper()}**\n"
                         f"🔴 **RSI 4H: {rsi_4h_closed} (PRÓG: {sell_rsi_threshold})**\n"
-                        f"🔴 **TREND 1D: SPADKOWY**"
+                        f"🔴 **TREND 1D: SPADKOWY**\n\n"
+                        f"🔗 {tv_crypto_link} | {kraken_trade_link}"
                     )
 
                 pending_alerts.append((task_title, msg, display_symbol, status_txt))
