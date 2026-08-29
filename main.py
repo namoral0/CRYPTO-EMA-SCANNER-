@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -78,7 +79,8 @@ def add_to_tasks(title, notes):
 
 # --- 4. GŁÓWNA PĘTLA APLIKACJI ---
 def main():
-    logging.info("Uruchamianie skanera Krypto (Kraken CCXT)...")
+    start_time = time.time()
+    logging.info("Uruchamianie ekspresowego skanera Krypto (Kraken CCXT)...")
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
     
@@ -99,7 +101,7 @@ def main():
 
     for symbol in SYMBOLS:
         try:
-            time.sleep(1.2)
+            time.sleep(1.2)  # Ochrona przed Rate Limitem Krakena
             is_core = symbol in CORE_CRYPTO
             quote_currency = symbol.split('/')[1]
             btc_symbol = f"BTC/{quote_currency}"
@@ -114,8 +116,7 @@ def main():
             df_4h_btc = btc_data_cache[btc_symbol]["4h"]
             df_1d_btc = btc_data_cache[btc_symbol]["1d"]
 
-            # --- POPRAWKA 3: BTC Macro Guard ---
-            # Sprawdzenie czy BTC znajduje się powyżej swojej średniej 1D EMA 200
+            # --- POPRAWKA: BTC Macro Guard ---
             btc_ema_200_1d = df_1d_btc['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             is_btc_macro_bullish = bool(df_1d_btc['close'].iloc[-1] > btc_ema_200_1d)
 
@@ -152,7 +153,7 @@ def main():
             df_4h['ATR_MA'] = df_4h['ATR'].rolling(window=20).mean()
             df_4h['Vol_MA'] = df_4h['v'].rolling(window=20).mean()
 
-            # --- POPRAWKA 1: Wskaźnik ADX (14) na ramie 4H ---
+            # --- POPRAWKA: Wskaźnik ADX (14) na ramie 4H ---
             plus_dm = df_4h['h'].diff()
             minus_dm = df_4h['l'].diff()
             plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
@@ -188,7 +189,7 @@ def main():
 
             rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
             
-            # --- POPRAWKA 5: Użycie ZAMKNIĘTEJ świecy 15M (iloc[-2]) zamiast żywej (iloc[-1]) ---
+            # --- POPRAWKA: Zamknięta świeca 15M (iloc[-2]) ---
             rsi_15m_closed = round(df_15m['RSI'].iloc[-2], 1)
             
             close_closed = df_4h['close'].iloc[-2]
@@ -203,13 +204,13 @@ def main():
             avg_vol = df_4h['Vol_MA'].iloc[-2]
             vol_multiplier = current_vol / avg_vol if not pd.isna(avg_vol) and avg_vol > 0 else 0
             
-            # --- POPRAWKA 2: Wolumen skokowy uznawany TYLKO przy zielonej świecy (close > open) ---
+            # --- POPRAWKA: Wolumen skokowy uznawany TYLKO przy zielonej świecy ---
             is_green_candle_4h = df_4h['close'].iloc[-2] > df_4h['o'].iloc[-2]
             is_volume_spike = (vol_multiplier > 1.4) and is_green_candle_4h
             
             is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
             
-            # --- POPRAWKA 4: Dynamiczny TP (Trailing ATR w hossie 1D vs BB Upper w bessie/konsolidacji) ---
+            # --- POPRAWKA: Dynamiczny TP (Trailing ATR w hossie vs BB Upper) ---
             if is_uptrend_1d:
                 tp_target_raw = close_closed + (2.5 * atr_val)
             else:
@@ -254,18 +255,15 @@ def main():
             is_oversold_4h = rsi_4h_closed <= buy_rsi_threshold
             is_overbought_4h = rsi_4h_closed >= sell_rsi_threshold
             
-            # Podstawowa logika kupna z wykorzystaniem zamkniętej świecy 15M (rsi_15m_closed)
             if is_core:
                 is_base_buy = ((is_oversold_4h and rsi_15m_closed <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed)) and not is_anomaly_candle
             else:
                 is_base_buy = (is_oversold_4h and (rsi_15m_closed <= confirm_15m_buy or close_closed <= bb_lower_closed)) and not is_anomaly_candle
 
-            # --- APKLIKACJA REGULARIZACJI Z POPRAWKI 1 & 3 ---
-            # POPRAWKA 1 (ADX): W silnym trendzie spadkowym 4H (ADX > 25 przy braku trendu 1D) ignorujemy kupno
+            # FILTRY BEZPIECZEŃSTWA
             if is_trending_4h and not is_uptrend_1d:
                 is_base_buy = False
 
-            # POPRAWKA 3 (BTC Macro Guard): Wyłączamy kupno altcoinów, gdy BTC ma trend spadkowy na 1D
             if not is_core and not is_btc_macro_bullish:
                 is_base_buy = False
 
@@ -366,20 +364,22 @@ def main():
         except Exception as e:
             logging.error(f"Błąd skanera dla {symbol}: {e}")
 
+    # Wielowątkowa wysyłka alertów do zewnętrznych API
     if pending_alerts:
-        if len(pending_alerts) <= 3:
-            for task_title, msg, _, _ in pending_alerts:
-                send_telegram_alert(msg)
-                add_to_tasks(task_title, msg.replace('**', ''))
-        else:
-            lawina_title = f"🚨 LAWINOWA ZMIANA NA RYNKU: {len(pending_alerts)} ALERTÓW!"
-            lawina_msg = f"⚠️ **ZMASOWANA ZMIANA STANU RYNKU ({len(pending_alerts)} MONET)**\n\nWygaszenie pojedynczych alertów – rynek reaguje grupowo:\n\n"
-            for _, _, sym, stat in pending_alerts:
-                lawina_msg += f"• **{sym}**: {stat}\n"
-            lawina_msg += "\n*Sprawdź szczegóły w aplikacji lub poczekaj na digest.*"
-            
-            send_telegram_alert(lawina_msg)
-            add_to_tasks(lawina_title, lawina_msg.replace('**', ''))
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            if len(pending_alerts) <= 3:
+                for task_title, msg, _, _ in pending_alerts:
+                    executor.submit(send_telegram_alert, msg)
+                    executor.submit(add_to_tasks, task_title, msg.replace('**', ''))
+            else:
+                lawina_title = f"🚨 LAWINOWA ZMIANA NA RYNKU: {len(pending_alerts)} ALERTÓW!"
+                lawina_msg = f"⚠️ **ZMASOWANA ZMIANA STANU RYNKU ({len(pending_alerts)} MONET)**\n\nWygaszenie pojedynczych alertów – rynek reaguje grupowo:\n\n"
+                for _, _, sym, stat in pending_alerts:
+                    lawina_msg += f"• **{sym}**: {stat}\n"
+                lawina_msg += "\n*Sprawdź szczegóły w aplikacji lub poczekaj na digest.*"
+                
+                executor.submit(send_telegram_alert, lawina_msg)
+                executor.submit(add_to_tasks, lawina_title, lawina_msg.replace('**', ''))
 
     any_cache_date = ""
     for v in cache.values():
@@ -393,10 +393,12 @@ def main():
         add_to_tasks(f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
         
         for sym in cache: 
-            cache[sym]["last_digest_date"] = today_str
+            if isinstance(cache[sym], dict):
+                cache[sym]["last_digest_date"] = today_str
 
     save_cache(cache)
-    logging.info("Skaner Krypto zakończył działanie.")
+    elapsed = round(time.time() - start_time, 2)
+    logging.info(f"Skaner Krypto zakończył działanie w czasie: {elapsed}s.")
 
 if __name__ == "__main__":
     try:
