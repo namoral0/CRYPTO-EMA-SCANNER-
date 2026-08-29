@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from datetime import datetime
@@ -15,17 +16,43 @@ try:
 except ImportError:
     HAS_GOOGLE = False
 
+# --- 1. KONFIGURACJA LOGOWANIA ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# --- 2. ZMIENNE ŚRODOWISKOWE I STAŁE ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
+GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID", "@default")
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
-    "XRP/GBP", "BTC/GBP", "ETH/GBP", "LINK/GBP", "SOL/GBP", 
-    "ONDO/USD", "SUI/GBP", "AAVE/GBP", "AVAX/USD", "NEAR/USD",
-    "TAO/USD", "RENDER/USD"
+    "TAO/USD", "BTC/GBP", "ETH/GBP", "ONDO/USD", "SOL/GBP", 
+    "XRP/GBP", "RENDER/USD", "SUI/GBP", "LINK/GBP", "AAVE/GBP"
 ]
-CACHE_FILE = "cache.json"
+CACHE_FILE = "cache_krypto.json"
+
+
+# --- 3. FUNKCJE POMOCNICZE (KOMUNIKACJA I STAN) ---
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Nie można załadować pliku cache: {e}")
+    return {}
+
+def save_cache(cache_data):
+    try:
+        with open(CACHE_FILE, "w") as f:
+            json.dump(cache_data, f, indent=2)
+    except Exception as e:
+        logging.error(f"Nie udało się zapisać cache: {e}")
 
 def send_telegram_alert(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -34,7 +61,7 @@ def send_telegram_alert(msg):
     try:
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
     except Exception as e:
-        print(f"❌ Nie udało się wysłać wiadomości na Telegram: {e}")
+        logging.error(f"Nie udało się wysłać wiadomości na Telegram: {e}")
 
 def add_to_tasks(title, notes):
     if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS:
@@ -43,27 +70,19 @@ def add_to_tasks(title, notes):
         creds_dict = json.loads(GOOGLE_TASKS_CREDENTIALS)
         creds = Credentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/tasks"])
         service = build('tasks', 'v1', credentials=creds)
-        service.tasks().insert(tasklist='@default', body={'title': title, 'notes': notes}).execute()
+        service.tasks().insert(tasklist=GOOGLE_TASK_LIST_ID, body={'title': title, 'notes': notes}).execute()
+        logging.info(f"Dodano zadanie do Google Tasks: {title}")
     except Exception as e:
-        print(f"❌ Błąd Tasks: {e}")
+        logging.error(f"Błąd Tasks: {e}")
 
+
+# --- 4. GŁÓWNA PĘTLA APLIKACJI ---
 def main():
+    logging.info("Uruchamianie skanera Krypto (Kraken CCXT)...")
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
     
-    cache = {}
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r") as f: 
-                loaded_cache = json.load(f)
-                for k, v in loaded_cache.items():
-                    if isinstance(v, int):
-                        cache[k] = {"ts": v, "signal": "NONE", "last_digest_date": ""}
-                    elif isinstance(v, dict):
-                        cache[k] = v
-        except Exception:
-            pass
-    
+    cache = load_cache()
     exchange = ccxt.kraken({'enableRateLimit': True})
     usd_gbp_rate = 0.78
     
@@ -72,7 +91,7 @@ def main():
         if ticker_gbp and ticker_gbp.get('last'):
             usd_gbp_rate = 1.0 / ticker_gbp['last']
     except Exception as e:
-        send_telegram_alert(f"⚠️ **Ostrzeżenie API:** Problem z kursem GBP/USD (`{str(e)}`). Użyto kursu domyślnego 0.78.")
+        logging.warning(f"Problem z kursem GBP/USD (`{str(e)}`). Użyto kursu domyślnego 0.78.")
 
     digest_lines = []
     btc_data_cache = {}
@@ -167,19 +186,19 @@ def main():
             
             if symbol.endswith("/USD"):
                 price_gbp = close_closed * usd_gbp_rate
-                display_price = f"£{price_gbp:.4f}"
+                display_price = f"£{price_gbp:.4f}" if price_gbp < 1 else f"£{price_gbp:.2f}"
                 display_symbol = symbol 
                 sl_calc = max(0, (close_closed - 1.5 * atr_val) * usd_gbp_rate)
                 tp_calc = bb_upper_closed * usd_gbp_rate
-                sl_str = f"£{sl_calc:.4f}"
-                tp_str = f"£{tp_calc:.4f}"
+                sl_str = f"£{sl_calc:.4f}" if sl_calc < 1 else f"£{sl_calc:.2f}"
+                tp_str = f"£{tp_calc:.4f}" if tp_calc < 1 else f"£{tp_calc:.2f}"
             else:
-                display_price = f"£{close_closed:.4f}"
+                display_price = f"£{close_closed:.4f}" if close_closed < 1 else f"£{close_closed:.2f}"
                 display_symbol = symbol
                 sl_calc = max(0, close_closed - 1.5 * atr_val)
                 tp_calc = bb_upper_closed
-                sl_str = f"£{sl_calc:.4f}"
-                tp_str = f"£{tp_calc:.4f}"
+                sl_str = f"£{sl_calc:.4f}" if sl_calc < 1 else f"£{sl_calc:.2f}"
+                tp_str = f"£{tp_calc:.4f}" if tp_calc < 1 else f"£{tp_calc:.2f}"
             
             base_buy, base_sell = (28, 70) if is_core else (22, 78)
             confirm_15m_buy, confirm_15m_sell = (38, 62) if is_core else (32, 68)
@@ -299,9 +318,7 @@ def main():
             cache[symbol] = {"ts": ts_closed, "signal": signal_to_save, "last_digest_date": cached_data.get("last_digest_date", "")}
         
         except Exception as e:
-            err_msg = f"⚠️ **Błąd skanera dla {symbol}:** `{str(e)}`"
-            print(err_msg)
-            send_telegram_alert(err_msg)
+            logging.error(f"Błąd skanera dla {symbol}: {e}")
 
     if pending_alerts:
         if len(pending_alerts) <= 3:
@@ -332,13 +349,15 @@ def main():
         for sym in cache: 
             cache[sym]["last_digest_date"] = today_str
 
-    with open(CACHE_FILE, "w") as f:
-        json.dump(cache, f, indent=2)
+    save_cache(cache)
+    logging.info("Skaner Krypto zakończył działanie.")
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        send_telegram_alert(f"🚨 **🔴 KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`")
-        add_to_tasks('KRYTYCZNY BŁĄD SKANERA KRYPTO', str(e))
+        logging.critical(f"KRYTYCZNY BŁĄD SKANERA KRYPTO: {e}", exc_info=True)
+        err_msg = f"🚨 **🔴 KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`"
+        send_telegram_alert(err_msg)
+        add_to_tasks('KRYTYCZNY BŁĄD SKANERA KRYPTO', err_msg)
         raise e
