@@ -3,10 +3,10 @@ name: Krypto Skaner 24/7
 on:
   schedule:
     - cron: '*/15 * * * *'  # Uruchamianie co 15 minut 24/7
-  workflow_dispatch:        # Umożliwia ręczne uruchomienie z panelu GitHub
+  workflow_dispatch:
 
 permissions:
-  contents: write  # Wymagane uprawnienia do zapisywania pliku cache w repozytorium
+  contents: write
 
 jobs:
   skaner:
@@ -38,6 +38,7 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+          git pull --rebase origin main || true
           git add cache.json
           git commit -m "Aktualizacja cache.json [skip ci]" || exit 0
           git push
