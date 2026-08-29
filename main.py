@@ -31,7 +31,7 @@ GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID", "@default")
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
-    "TAO/USD", "BTC/GBP", "ETH/GBP", "ONDO/USD", "SOL/GBP", 
+    "TAO/USD", "BTC/GBP", "ETH/GBP", "SOL/GBP", 
     "XRP/GBP", "RENDER/USD", "SUI/GBP", "LINK/GBP", "AAVE/GBP"
 ]
 CACHE_FILE = "cache_krypto.json"
