@@ -112,6 +112,12 @@ def main():
                 btc_data_cache[btc_symbol] = {"1d": df_1d_btc, "4h": df_4h_btc}
 
             df_4h_btc = btc_data_cache[btc_symbol]["4h"]
+            df_1d_btc = btc_data_cache[btc_symbol]["1d"]
+
+            # --- POPRAWKA 3: BTC Macro Guard ---
+            # Sprawdzenie czy BTC znajduje się powyżej swojej średniej 1D EMA 200
+            btc_ema_200_1d = df_1d_btc['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            is_btc_macro_bullish = bool(df_1d_btc['close'].iloc[-1] > btc_ema_200_1d)
 
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
             if len(df_1d) < 30:
@@ -146,6 +152,19 @@ def main():
             df_4h['ATR_MA'] = df_4h['ATR'].rolling(window=20).mean()
             df_4h['Vol_MA'] = df_4h['v'].rolling(window=20).mean()
 
+            # --- POPRAWKA 1: Wskaźnik ADX (14) na ramie 4H ---
+            plus_dm = df_4h['h'].diff()
+            minus_dm = df_4h['l'].diff()
+            plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+            minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+            atr_14_ewm = true_range.ewm(alpha=1/14, adjust=False).mean()
+            plus_di = 100 * (plus_dm.ewm(alpha=1/14, adjust=False).mean() / atr_14_ewm.replace(0, 1e-10))
+            minus_di = 100 * (minus_dm.ewm(alpha=1/14, adjust=False).mean() / atr_14_ewm.replace(0, 1e-10))
+            dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)
+            df_4h['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean()
+            adx_closed = df_4h['ADX'].iloc[-2]
+            is_trending_4h = adx_closed > 25
+
             is_strong_vs_btc_4h = True
             if symbol != btc_symbol:
                 merged_rs = pd.merge(df_4h[['ts', 'close']], df_4h_btc[['ts', 'close']], on='ts', suffixes=('', '_btc'))
@@ -168,7 +187,9 @@ def main():
             df_15m['RSI'] = 100 - (100 / (1 + (gain_15m / loss_15m)))
 
             rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
-            rsi_15m_live = round(df_15m['RSI'].iloc[-1], 1)
+            
+            # --- POPRAWKA 5: Użycie ZAMKNIĘTEJ świecy 15M (iloc[-2]) zamiast żywej (iloc[-1]) ---
+            rsi_15m_closed = round(df_15m['RSI'].iloc[-2], 1)
             
             close_closed = df_4h['close'].iloc[-2]
             bb_upper_closed = df_4h['BB_upper'].iloc[-2]
@@ -181,25 +202,40 @@ def main():
             current_vol = df_4h['v'].iloc[-2]
             avg_vol = df_4h['Vol_MA'].iloc[-2]
             vol_multiplier = current_vol / avg_vol if not pd.isna(avg_vol) and avg_vol > 0 else 0
-            is_volume_spike = vol_multiplier > 1.4
+            
+            # --- POPRAWKA 2: Wolumen skokowy uznawany TYLKO przy zielonej świecy (close > open) ---
+            is_green_candle_4h = df_4h['close'].iloc[-2] > df_4h['o'].iloc[-2]
+            is_volume_spike = (vol_multiplier > 1.4) and is_green_candle_4h
+            
             is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
             
+            # --- POPRAWKA 4: Dynamiczny TP (Trailing ATR w hossie 1D vs BB Upper w bessie/konsolidacji) ---
+            if is_uptrend_1d:
+                tp_target_raw = close_closed + (2.5 * atr_val)
+            else:
+                tp_target_raw = bb_upper_closed
+
             if symbol.endswith("/USD"):
                 price_gbp = close_closed * usd_gbp_rate
                 display_price = f"£{price_gbp:.4f}" if price_gbp < 1 else f"£{price_gbp:.2f}"
                 display_symbol = symbol 
                 sl_calc = max(0, (close_closed - 1.5 * atr_val) * usd_gbp_rate)
-                tp_calc = bb_upper_closed * usd_gbp_rate
+                tp_calc = tp_target_raw * usd_gbp_rate
                 sl_str = f"£{sl_calc:.4f}" if sl_calc < 1 else f"£{sl_calc:.2f}"
                 tp_str = f"£{tp_calc:.4f}" if tp_calc < 1 else f"£{tp_calc:.2f}"
             else:
                 display_price = f"£{close_closed:.4f}" if close_closed < 1 else f"£{close_closed:.2f}"
                 display_symbol = symbol
                 sl_calc = max(0, close_closed - 1.5 * atr_val)
-                tp_calc = bb_upper_closed
+                tp_calc = tp_target_raw
                 sl_str = f"£{sl_calc:.4f}" if sl_calc < 1 else f"£{sl_calc:.2f}"
                 tp_str = f"£{tp_calc:.4f}" if tp_calc < 1 else f"£{tp_calc:.2f}"
             
+            if is_uptrend_1d:
+                tp_str += " (Trailing ATR)"
+            else:
+                tp_str += " (BB Upper)"
+
             base_buy, base_sell = (28, 70) if is_core else (22, 78)
             confirm_15m_buy, confirm_15m_sell = (38, 62) if is_core else (32, 68)
 
@@ -218,12 +254,22 @@ def main():
             is_oversold_4h = rsi_4h_closed <= buy_rsi_threshold
             is_overbought_4h = rsi_4h_closed >= sell_rsi_threshold
             
+            # Podstawowa logika kupna z wykorzystaniem zamkniętej świecy 15M (rsi_15m_closed)
             if is_core:
-                is_base_buy = ((is_oversold_4h and rsi_15m_live <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed)) and not is_anomaly_candle
+                is_base_buy = ((is_oversold_4h and rsi_15m_closed <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed)) and not is_anomaly_candle
             else:
-                is_base_buy = (is_oversold_4h and (rsi_15m_live <= confirm_15m_buy or close_closed <= bb_lower_closed)) and not is_anomaly_candle
+                is_base_buy = (is_oversold_4h and (rsi_15m_closed <= confirm_15m_buy or close_closed <= bb_lower_closed)) and not is_anomaly_candle
 
-            is_base_sell = ((is_overbought_4h and rsi_15m_live >= confirm_15m_sell) or crossover_down or (is_overbought_4h and close_closed >= bb_upper_closed)) and not is_anomaly_candle
+            # --- APKLIKACJA REGULARIZACJI Z POPRAWKI 1 & 3 ---
+            # POPRAWKA 1 (ADX): W silnym trendzie spadkowym 4H (ADX > 25 przy braku trendu 1D) ignorujemy kupno
+            if is_trending_4h and not is_uptrend_1d:
+                is_base_buy = False
+
+            # POPRAWKA 3 (BTC Macro Guard): Wyłączamy kupno altcoinów, gdy BTC ma trend spadkowy na 1D
+            if not is_core and not is_btc_macro_bullish:
+                is_base_buy = False
+
+            is_base_sell = ((is_overbought_4h and rsi_15m_closed >= confirm_15m_sell) or crossover_down or (is_overbought_4h and close_closed >= bb_upper_closed)) and not is_anomaly_candle
 
             current_signal_type = "NONE"
             if is_base_buy:
@@ -244,7 +290,7 @@ def main():
             status_txt = status_map.get(current_signal_type, "Neutralny")
             trend_txt = "↗️" if is_uptrend_1d else "↘️"
             
-            digest_lines.append(f"🪙 **{display_symbol}** — {display_price}\n  └ RSI: {rsi_4h_closed} | Trend: {trend_txt} | Stan: {status_txt}\n")
+            digest_lines.append(f"🪙 **{display_symbol}** — {display_price}\n  └ RSI: {rsi_4h_closed} | ADX: {round(adx_closed,1)} | Trend: {trend_txt} | Stan: {status_txt}\n")
 
             cached_data = cache.get(symbol, {})
             last_ts = cached_data.get("ts", 0)
@@ -271,7 +317,7 @@ def main():
                         f"{rodzaj}\n\n"
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
-                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
+                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
                         f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n"
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}\n"
                         f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
@@ -284,7 +330,7 @@ def main():
                         f"{rodzaj}\n\n"
                         f"🪙 **Moneta:** `{display_symbol}`\n"
                         f"💰 **Cena:** `{display_price}`\n"
-                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}`\n"
+                        f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
                         f"💪 **Siła Wzgl. (BTC):** {'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}\n"
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}\n"
                         f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
