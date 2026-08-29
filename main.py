@@ -1,11 +1,12 @@
-import os
-import ccxt
-import pandas as pd
-import requests
 import json
+import os
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+import ccxt
+import pandas as pd
+import requests
 
 try:
     from google.oauth2.service_account import Credentials
@@ -14,7 +15,6 @@ try:
 except ImportError:
     HAS_GOOGLE = False
 
-# Poprawka: Obsługa obu wariantów nazwy tokena z GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
@@ -28,7 +28,8 @@ SYMBOLS = [
 CACHE_FILE = "cache.json"
 
 def send_telegram_alert(msg):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
@@ -36,7 +37,8 @@ def send_telegram_alert(msg):
         print(f"❌ Nie udało się wysłać wiadomości na Telegram: {e}")
 
 def add_to_tasks(title, notes):
-    if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS: return
+    if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS:
+        return
     try:
         creds_dict = json.loads(GOOGLE_TASKS_CREDENTIALS)
         creds = Credentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/tasks"])
@@ -59,7 +61,8 @@ def main():
                         cache[k] = {"ts": v, "signal": "NONE", "last_digest_date": ""}
                     elif isinstance(v, dict):
                         cache[k] = v
-        except Exception: pass
+        except Exception:
+            pass
     
     exchange = ccxt.kraken({'enableRateLimit': True})
     usd_gbp_rate = 0.78
@@ -89,17 +92,18 @@ def main():
                 df_4h_btc = pd.DataFrame(exchange.fetch_ohlcv(btc_symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
                 btc_data_cache[btc_symbol] = {"1d": df_1d_btc, "4h": df_4h_btc}
 
-            df_1d_btc = btc_data_cache[btc_symbol]["1d"]
             df_4h_btc = btc_data_cache[btc_symbol]["4h"]
 
             df_1d = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1d", limit=250), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            if len(df_1d) < 30: continue  
+            if len(df_1d) < 30:
+                continue  
             
             ema_200_1d = df_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             is_uptrend_1d = df_1d['close'].iloc[-1] > ema_200_1d
 
             df_4h = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="4h", limit=300), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            if len(df_4h) < 100: continue
+            if len(df_4h) < 100:
+                continue
             
             ts_closed = int(df_4h['ts'].iloc[-2])
             
@@ -137,7 +141,8 @@ def main():
                         is_strong_vs_btc_4h = bool(rs_series.iloc[-1] >= rs_ema.iloc[-1])
 
             df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="15m", limit=100), columns=['ts', 'o', 'h', 'l', 'close', 'v'])
-            if len(df_15m) < 20: continue
+            if len(df_15m) < 20:
+                continue
             delta_15m = df_15m['close'].diff()
             gain_15m = delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean()
             loss_15m = (-delta_15m.where(delta_15m < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
@@ -224,13 +229,7 @@ def main():
                 elif last_signal != current_signal_type:
                     should_alert = True
             
-            if current_signal_type != "NONE":
-                signal_to_save = current_signal_type
-            else:
-                if last_ts == ts_closed:
-                    signal_to_save = last_signal
-                else:
-                    signal_to_save = "NONE"
+            signal_to_save = current_signal_type if current_signal_type != "NONE" else (last_signal if last_ts == ts_closed else "NONE")
 
             if should_alert:
                 if current_signal_type == "BUY_MEGA":
@@ -245,7 +244,7 @@ def main():
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}"
                     )
                 elif current_signal_type == "BUY_SWING":
-                    rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALny DOŁEK)**"
+                    rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)**"
                     task_title = f"SWING: SPRAWDŹ {display_symbol}"
                     msg = (
                         f"{rodzaj}\n\n"
@@ -266,10 +265,10 @@ def main():
                         f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}"
                     )
                 else: 
-                    rodzaj = "KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
+                    rodzaj = "🔴 KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
                     task_title = f"🔴 PILNE: SPRZEDAJ {display_symbol.upper()}"
                     msg = (
-                        f"🔴 **{rodzaj}**\n\n"
+                        f"🚨 **{rodzaj}**\n\n"
                         f"🔴 **MONETA: {display_symbol.upper()}**\n"
                         f"🔴 **CENA: {display_price.upper()}**\n"
                         f"🔴 **RSI 4H: {rsi_4h_closed} (PRÓG: {sell_rsi_threshold})**\n"
@@ -314,11 +313,13 @@ def main():
         for sym in cache: 
             cache[sym]["last_digest_date"] = today_str
 
-    with open(CACHE_FILE, "w") as f: json.dump(cache, f)
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f, indent=2)
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        send_telegram_alert(f"🚨 **KRYTYCZNY BŁĄD SKANER KRYPTO:**\n`{str(e)}`")
+        send_telegram_alert(f"🚨 **🔴 KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`")
+        add_to_tasks('KRYTYCZNY BŁĄD SKANERA KRYPTO', str(e))
         raise e
