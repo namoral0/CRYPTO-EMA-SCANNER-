@@ -323,3 +323,4 @@ if __name__ == "__main__":
         send_telegram_alert(f"🚨 **🔴 KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`")
         add_to_tasks('KRYTYCZNY BŁĄD SKANERA KRYPTO', str(e))
         raise e
+
