@@ -5,4 +5,5 @@ requests
 gspread
 google-api-python-client
 ccxt
+httpx
 
