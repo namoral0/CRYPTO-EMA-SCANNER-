@@ -33,7 +33,7 @@
   "SUI/GBP": {
     "ts": 1788076800000,
     "signal": "BUY_MEGA",
-    "count": 7
+    "count": 8
   },
   "LINK/GBP": {
     "ts": 1788076800000,
@@ -44,5 +44,6 @@
     "ts": 1788076800000,
     "signal": "NONE",
     "count": 0
-  }
+  },
+  "active_positions": {}
 }
