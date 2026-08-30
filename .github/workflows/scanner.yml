@@ -1,45 +1,40 @@
-name: Krypto Skaner 24/7
+name: Crypto Scanner Schedule
 
 on:
   schedule:
+    # Uruchamianie automatyczne co 15 minut (od 0 do 59 minuty)
     - cron: '*/15 * * * *'
-  workflow_dispatch:
-
-permissions:
-  contents: write
+  workflow_dispatch: # Umożliwia ręczne uruchomienie skryptu przyciskiem w GitHubie
 
 jobs:
-  skaner:
+  run-scanner:
     runs-on: ubuntu-latest
 
     steps:
       - name: Pobranie kodu z repozytorium
         uses: actions/checkout@v4
 
-      - name: Instalacja środowiska Python
+      - name: Konfiguracja środowiska Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Instalacja bibliotek
+      - name: Instalacja wymaganych pakietów
         run: |
           python -m pip install --upgrade pip
-          pip install requests ccxt pandas numpy gspread google-api-python-client google-auth
+          if [ -f requirements.txt ]; then 
+            pip install -r requirements.txt
+          else 
+            pip install ccxt pandas gspread requests google-api-python-client google-auth
+          fi
 
-      - name: Uruchomienie skanera krypto
+      - name: Wykonanie skanera Krypto
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
-        run: |
-          python main.py
-
-      - name: Zapisanie pamięci cache w repozytorium
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add cache_krypto.json
-          git commit -m "Aktualizacja cache_krypto.json [skip ci]" || exit 0
-          git pull --rebase -X ours origin main
-          git push origin main
+          GOOGLE_TASK_LIST_ID: ${{ secrets.GOOGLE_TASK_LIST_ID }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          FIXED_RISK_GBP: "50.0"
+        run: python main.py
