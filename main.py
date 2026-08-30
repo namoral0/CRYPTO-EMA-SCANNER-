@@ -30,11 +30,11 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Obsługa fallbacku dla pustego ciągu znaków w GitHub Secrets
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-FIXED_RISK_GBP = float(os.getenv("FIXED_RISK_GBP", "50.0"))
+# Domyślne ryzyko zmienione na £10
+FIXED_RISK_GBP = float(os.getenv("FIXED_RISK_GBP", "10.0"))
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
@@ -43,7 +43,6 @@ SYMBOLS = [
 ]
 CACHE_FILE = "cache_krypto.json"
 
-# Ochrona przed przekroczeniem limitów API (Rate Limit 429)
 KRAKEN_SEMAPHORE = asyncio.Semaphore(3)
 
 
@@ -114,9 +113,7 @@ async def add_to_tasks_async(tasks_service, title, notes):
 
 # --- 4. FUNKCJE ANALITYCZNE I MATEMATYCZNE ---
 def check_bullish_divergence(df_4h, lookback=35):
-    """
-    Wykrywa byczą dywergencję RSI na podstawie punktów zwrotnych (Pivot Lows).
-    """
+    """Wykrywa byczą dywergencję RSI na podstawie punktów zwrotnych (Pivot Lows)."""
     try:
         if len(df_4h) < lookback + 5:
             return False
@@ -154,7 +151,7 @@ def check_bullish_divergence(df_4h, lookback=35):
     return False
 
 def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
-    """Oblicza wielkość pozycji w GBP przy ryzyku £50."""
+    """Oblicza wielkość pozycji w GBP przy wybranym ryzyku (domyślnie £10)."""
     try:
         if price_gbp <= sl_gbp or sl_gbp <= 0:
             return 0.0
@@ -218,7 +215,7 @@ def compute_indicators(df_1d, df_4h, df_15m):
 
 # --- 5. ASYNCHRONICZNE POBIERANIE DANYCH Z SEMAFOREM ---
 async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retries=3, delay=1.0):
-    """Pobiera świece asynchronicznie, ograniczając jednoczesne połączenia."""
+    """Pobiera świece asynchronicznie z limitem połączeń."""
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
             try:
@@ -364,7 +361,7 @@ async def main():
             tp_str = f"£{tp_calc_gbp:.4f}" if tp_calc_gbp < 1 else f"£{tp_calc_gbp:.2f}"
             tp_str += " (Trailing ATR)" if is_uptrend_1d else " (BB Upper)"
 
-            # Wyliczenie wielkości pozycji dla ryzyka £50 GBP
+            # Wyliczenie wielkości pozycji dla ryzyka £10 GBP
             position_gbp = calculate_position_size(price_gbp, sl_calc_gbp, FIXED_RISK_GBP)
             pos_size_str = f"£{position_gbp:.2f}" if position_gbp > 0 else "N/A"
 
@@ -423,16 +420,26 @@ async def main():
 
             last_ts = cached_data.get("ts", 0)
             last_signal = cached_data.get("signal", "NONE")
+            last_count = cached_data.get("count", 0)
 
             should_alert = False
+            current_count = 0
+
+            # Kontrola powtórzeń (maksymalnie 2 alerty na dany sygnał w obrębie tej samej świecy)
             if current_signal_type != "NONE":
-                if last_ts != ts_closed or last_signal != current_signal_type:
+                if last_signal == current_signal_type and last_ts == ts_closed:
+                    current_count = last_count + 1
+                    if current_count <= 2:
+                        should_alert = True
+                else:
+                    current_count = 1
                     should_alert = True
-            
+            else:
+                current_count = 0
+
             signal_to_save = current_signal_type if current_signal_type != "NONE" else (last_signal if last_ts == ts_closed else "NONE")
 
             if should_alert:
-                # Dedykowany odnośnik do aplikacji Trading 212
                 t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
                 div_note = "\n📈 **Wykryto BYCZĄ DYWERGENCJĘ RSI (4H)!**\n" if has_bullish_div else ""
 
@@ -446,7 +453,7 @@ async def main():
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
                         f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n"
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}\n"
-                        f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £50):** `{pos_size_str}`\n"
+                        f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £10):** `{pos_size_str}`\n"
                         f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
                         f"🔗 {t212_link}"
                     )
@@ -460,7 +467,7 @@ async def main():
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
                         f"💪 **Siła Wzgl. (BTC):** {'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}\n"
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}\n"
-                        f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £50):** `{pos_size_str}`\n"
+                        f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £10):** `{pos_size_str}`\n"
                         f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
                         f"🔗 {t212_link}"
                     )
@@ -499,7 +506,11 @@ async def main():
                     }
                 ))
 
-            cache[symbol] = {"ts": ts_closed, "signal": signal_to_save}
+            cache[symbol] = {
+                "ts": ts_closed, 
+                "signal": signal_to_save,
+                "count": current_count if current_signal_type != "NONE" else 0
+            }
 
         # 3. ZBIORCZA NIEBLOKUJĄCA WYSYŁKA ALERTÓW ORAZ BATCH DO GOOGLE SHEETS
         if pending_alerts:
@@ -528,7 +539,6 @@ async def main():
                 await send_telegram_alert_async(lawina_msg)
                 await add_to_tasks_async(tasks_service, lawina_title, lawina_msg.replace('**', ''))
 
-            # Nieblokujący wpis wierszy do Google Sheets
             if sheet and rows_to_append:
                 try:
                     await asyncio.to_thread(sheet.append_rows, rows_to_append)
@@ -547,7 +557,6 @@ async def main():
         save_cache(cache)
 
     finally:
-        # Zamknięcie sesji asynchronicznej CCXT
         await exchange.close()
 
     elapsed = round(time.time() - start_time, 2)
