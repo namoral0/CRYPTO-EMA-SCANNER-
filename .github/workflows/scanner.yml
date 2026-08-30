@@ -38,8 +38,7 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add cache.json
-          git commit -m "Aktualizacja cache.json [skip ci]" || exit 0
+          git add cache_krypto.json
+          git commit -m "Aktualizacja cache_krypto.json [skip ci]" || exit 0
           git pull --rebase -X ours origin main
           git push origin main
-
