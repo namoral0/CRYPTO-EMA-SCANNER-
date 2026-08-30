@@ -29,7 +29,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID", "@default")
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
+raw_sheet_id = os.getenv("SPREADSHEET_ID", "")
+SPREADSHEET_ID = raw_sheet_id.strip().replace("\n", "").replace("\r", "").replace(" ", "") if raw_sheet_id else None
+
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
