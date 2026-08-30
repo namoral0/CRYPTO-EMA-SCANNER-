@@ -33,8 +33,8 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-# Domyślne ryzyko zmienione na £10
-FIXED_RISK_GBP = float(os.getenv("FIXED_RISK_GBP", "10.0"))
+# Sztywne ryzyko £10 (zapobiega nadpisywaniu starymi zmiennymi z GitHub Secrets)
+FIXED_RISK_GBP = 10.0
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
@@ -85,7 +85,7 @@ def save_cache(cache_data):
         logging.error(f"Nie udało się zapisać cache: {e}")
 
 async def send_telegram_alert_async(msg):
-    """Nieblokujące wysyłanie wiadomości na Telegram (w osobnej pętli I/O)."""
+    """Nieblokujące wysyłanie wiadomości na Telegram."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -151,7 +151,7 @@ def check_bullish_divergence(df_4h, lookback=35):
     return False
 
 def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
-    """Oblicza wielkość pozycji w GBP przy wybranym ryzyku (domyślnie £10)."""
+    """Oblicza optymalną wielkość pozycji w GBP dla ustalonego ryzyka (£10)."""
     try:
         if price_gbp <= sl_gbp or sl_gbp <= 0:
             return 0.0
@@ -361,7 +361,7 @@ async def main():
             tp_str = f"£{tp_calc_gbp:.4f}" if tp_calc_gbp < 1 else f"£{tp_calc_gbp:.2f}"
             tp_str += " (Trailing ATR)" if is_uptrend_1d else " (BB Upper)"
 
-            # Wyliczenie wielkości pozycji dla ryzyka £10 GBP
+            # Precyzyjne wyliczenie wielkości pozycji dla ryzyka FIXED_RISK_GBP (£10)
             position_gbp = calculate_position_size(price_gbp, sl_calc_gbp, FIXED_RISK_GBP)
             pos_size_str = f"£{position_gbp:.2f}" if position_gbp > 0 else "N/A"
 
@@ -425,7 +425,7 @@ async def main():
             should_alert = False
             current_count = 0
 
-            # Kontrola powtórzeń (maksymalnie 2 alerty na dany sygnał w obrębie tej samej świecy)
+            # Limit maksymalnie 2 alertów na świecę 4H
             if current_signal_type != "NONE":
                 if last_signal == current_signal_type and last_ts == ts_closed:
                     current_count = last_count + 1
@@ -442,6 +442,7 @@ async def main():
             if should_alert:
                 t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
                 div_note = "\n📈 **Wykryto BYCZĄ DYWERGENCJĘ RSI (4H)!**\n" if has_bullish_div else ""
+                risk_label = int(FIXED_RISK_GBP) if FIXED_RISK_GBP.is_integer() else FIXED_RISK_GBP
 
                 if current_signal_type == "BUY_MEGA":
                     rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)**"
@@ -453,7 +454,7 @@ async def main():
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
                         f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n"
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}\n"
-                        f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £10):** `{pos_size_str}`\n"
+                        f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £{risk_label}):** `{pos_size_str}`\n"
                         f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
                         f"🔗 {t212_link}"
                     )
@@ -467,7 +468,7 @@ async def main():
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
                         f"💪 **Siła Wzgl. (BTC):** {'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}\n"
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}\n"
-                        f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £10):** `{pos_size_str}`\n"
+                        f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £{risk_label}):** `{pos_size_str}`\n"
                         f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
                         f"🔗 {t212_link}"
                     )
