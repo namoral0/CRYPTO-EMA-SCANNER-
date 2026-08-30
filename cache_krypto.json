@@ -3,47 +3,47 @@
   "TAO/USD": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "BTC/GBP": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "ETH/GBP": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "SOL/GBP": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "XRP/GBP": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "RENDER/USD": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "SUI/GBP": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "LINK/GBP": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "AAVE/GBP": {
     "ts": 1788091200000,
     "signal": "NONE",
-    "count": 0
+    "last_alert_time": 0.0
   },
   "active_positions": {},
   "telegram_update_offset": 946934769
