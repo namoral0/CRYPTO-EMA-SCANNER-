@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -42,7 +43,12 @@ SYMBOLS = [
 ]
 CACHE_FILE = "cache_krypto.json"
 
+# Ochrona przed limitami zapytań Krakena oraz Google API
 KRAKEN_SEMAPHORE = asyncio.Semaphore(3)
+GOOGLE_SEMAPHORE = asyncio.Semaphore(2)
+
+# Czas blokady powtórnego powiadomienia (Cooldown: 24 godziny)
+SIGNAL_COOLDOWN_SECONDS = 86400
 
 
 # --- 3. INICJALIZACJA USŁUG I I/O ---
@@ -99,26 +105,29 @@ async def send_telegram_alert_async(http_client: httpx.AsyncClient, msg: str, cu
         logging.error(f"Nie udało się wysłać wiadomości na Telegram: {e}")
 
 async def add_to_tasks_async(tasks_service, title, notes):
-    """Nieblokujące dodawanie zadania do Google Tasks."""
+    """Nieblokujące dodawanie zadania do Google Tasks z zabezpieczeniem semaforem."""
     if not tasks_service:
         return
-    try:
-        await asyncio.to_thread(
-            lambda: tasks_service.tasks().insert(
-                tasklist=GOOGLE_TASK_LIST_ID, 
-                body={'title': title, 'notes': notes}
-            ).execute()
-        )
-        logging.info(f"Dodano zadanie do Google Tasks: {title}")
-    except Exception as e:
-        logging.error(f"Błąd Google Tasks: {e}")
+    async with GOOGLE_SEMAPHORE:
+        try:
+            await asyncio.to_thread(
+                lambda: tasks_service.tasks().insert(
+                    tasklist=GOOGLE_TASK_LIST_ID, 
+                    body={'title': title, 'notes': notes}
+                ).execute()
+            )
+            logging.info(f"Dodano zadanie do Google Tasks: {title}")
+        except Exception as e:
+            logging.error(f"Błąd Google Tasks: {e}")
 
-def write_github_step_summary(digest_rows):
-    """Generuje tabelę Markdown bezpośrednio w podsumowaniu GitHub Actions."""
+def write_github_step_summary(digest_rows, health_msg=""):
+    """Generuje tabelę Markdown bezpośrednio w podsumowaniu GitHub Actions wraz z diagnostyką."""
     summary_file = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_file:
         try:
             with open(summary_file, "a", encoding="utf-8") as f:
+                if health_msg:
+                    f.write(f"> {health_msg}\n\n")
                 f.write("### 📊 Podsumowanie Skanera Krypto\n\n")
                 f.write("| Moneta | Cena | RSI 4H | ADX 4H | Trend 1D | Stan |\n")
                 f.write("| --- | --- | --- | --- | --- | --- |\n")
@@ -221,10 +230,8 @@ def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
 
 def compute_indicators(df_1d, df_4h, df_15m):
     """Wyliczanie wskaźników technicznych."""
-    # 1D EMA 200
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
 
-    # 4H EMA, BB, RSI, ATR, ADX
     df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
     df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
     
@@ -260,7 +267,6 @@ def compute_indicators(df_1d, df_4h, df_15m):
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)
     df_4h['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean()
 
-    # 15M RSI
     delta_15m = df_15m['close'].diff()
     gain_15m = delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean()
     loss_15m = (-delta_15m.where(delta_15m < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
@@ -301,7 +307,7 @@ async def fetch_symbol_data(exchange, symbol):
 # --- 6. GŁÓWNA PĘTLA APLIKACJI ---
 async def main():
     start_time = time.time()
-    logging.info("Uruchamianie zoptymalizowanego skanera Krypto...")
+    logging.info("Uruchamianie Skanera Krypto (Tryb w 100% Instytucjonalny)...")
     
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
@@ -312,10 +318,10 @@ async def main():
     
     exchange = ccxt.kraken({'enableRateLimit': True})
     usd_gbp_rate = 0.78
+    elapsed = 0.0
 
     async with httpx.AsyncClient() as http_client:
         try:
-            # 1. Pobieranie danych BTC i Tickerów
             btc_tasks = [
                 fetch_ticker_safe(exchange, "GBP/USD"),
                 fetch_ohlcv_retry_async(exchange, "BTC/GBP", "1d", 250),
@@ -326,9 +332,13 @@ async def main():
                 fetch_ohlcv_retry_async(exchange, "BTC/USD", "15m", 100),
             ]
             
-            ticker_gbp, btc_gbp_1d, btc_gbp_4h, btc_gbp_15m, btc_usd_1d, btc_usd_4h, btc_usd_15m = await asyncio.gather(*btc_tasks)
+            btc_results = await asyncio.gather(*btc_tasks, return_exceptions=True)
+            if any(isinstance(res, Exception) for res in btc_results):
+                raise RuntimeError("Błąd krytyczny pobierania danych bazowych BTC/Benchmark.")
 
-            if ticker_gbp and ticker_gbp.get('last'):
+            ticker_gbp, btc_gbp_1d, btc_gbp_4h, btc_gbp_15m, btc_usd_1d, btc_usd_4h, btc_usd_15m = btc_results
+
+            if ticker_gbp and isinstance(ticker_gbp, dict) and ticker_gbp.get('last'):
                 usd_gbp_rate = 1.0 / ticker_gbp['last']
 
             cols = ['ts', 'o', 'h', 'l', 'close', 'v']
@@ -345,14 +355,12 @@ async def main():
                 },
             }
 
-            # Wyliczenie makro-trendu BTC raz przed pętlą symboli
             btc_macro_bullish = {}
             for btc_sym, btc_dfs in btc_cache.items():
                 df_b_1d = btc_dfs["1d"]
                 ema_200 = df_b_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
                 btc_macro_bullish[btc_sym] = bool(df_b_1d['close'].iloc[-1] > ema_200)
 
-            # 2. Pobieranie pozostałych symboli (z pominięciem tych, które są już w btc_cache)
             fetch_tasks = [fetch_symbol_data(exchange, sym) for sym in SYMBOLS if sym not in btc_cache]
             fetched_results = await asyncio.gather(*fetch_tasks)
 
@@ -377,7 +385,9 @@ async def main():
 
             active_positions = cache.get("active_positions", {})
 
-            # 3. Pętla analityczna dla każdego symbolu
+            success_count = 0
+            total_checked = len(SYMBOLS)
+
             for symbol, df_1d, df_4h, df_15m in results:
                 if df_1d is None or len(df_1d) < 30 or len(df_4h) < 100 or len(df_15m) < 20:
                     continue
@@ -433,6 +443,10 @@ async def main():
                 is_volume_spike = (vol_multiplier > 1.4) and is_green_candle_4h
                 is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
 
+                prev_close_price = float(df_1d['close'].iloc[-2]) if len(df_1d['close']) > 1 else close_closed
+                flash_crash_pct = round(((close_closed - prev_close_price) / prev_close_price) * 100, 2)
+                is_flash_crash = flash_crash_pct <= -3.5
+
                 tp_target_raw = close_closed + (2.5 * atr_val) if is_uptrend_1d else bb_upper_closed
 
                 if symbol.endswith("/USD"):
@@ -441,7 +455,7 @@ async def main():
                     low_gbp = low_closed * usd_gbp_rate
                     atr_gbp = atr_val * usd_gbp_rate
                     display_price = f"£{price_gbp:.4f}" if price_gbp < 1 else f"£{price_gbp:.2f}"
-                    sl_calc_gbp = max(0, (close_closed - 1.5 * atr_val) * usd_gbp_rate)
+                    sl_calc_gbp = max(0, min((close_closed - 1.5 * atr_val) * usd_gbp_rate, low_gbp))
                     tp_calc_gbp = tp_target_raw * usd_gbp_rate
                 else:
                     price_gbp = close_closed
@@ -449,7 +463,7 @@ async def main():
                     low_gbp = low_closed
                     atr_gbp = atr_val
                     display_price = f"£{close_closed:.4f}" if close_closed < 1 else f"£{close_closed:.2f}"
-                    sl_calc_gbp = max(0, close_closed - 1.5 * atr_val)
+                    sl_calc_gbp = max(0, min(close_closed - 1.5 * atr_val, low_gbp))
                     tp_calc_gbp = tp_target_raw
 
                 sl_str = f"£{sl_calc_gbp:.4f}" if sl_calc_gbp < 1 else f"£{sl_calc_gbp:.2f}"
@@ -459,7 +473,7 @@ async def main():
                 position_gbp = calculate_position_size(price_gbp, sl_calc_gbp, FIXED_RISK_GBP)
                 pos_size_str = f"£{position_gbp:.2f}" if position_gbp > 0 else "N/A"
 
-                # WERYFIKACJA AKTYWNYCH POZYCJI (TP1 / TRAILING SL / STOP LOSS)
+                # WERYFIKACJA AKTYWNYCH POZYCJI
                 if symbol in active_positions:
                     pos = active_positions[symbol]
                     entry_price = pos["entry_price"]
@@ -468,6 +482,32 @@ async def main():
                     pos_atr_gbp = pos.get("atr_gbp", atr_gbp)
 
                     pos["highest_price"] = max(pos.get("highest_price", price_gbp), high_gbp)
+
+                    if is_flash_crash and price_gbp <= sl_price and not pos.get("crash_alert_sent", False):
+                        crash_msg = (
+                            f"🚨 **OSTRZEŻENIE: FLASH CRASH / ZAŁAMANIE DLA {symbol}!**\n\n"
+                            f"Cena zanurkowała o `{flash_crash_pct}%`. Pozycja otwarta po `£{entry_price:.4f}` dotknęła poziomu Stop Loss (`£{sl_price:.4f}`)."
+                        )
+                        position_async_tasks.append(send_telegram_alert_async(http_client, crash_msg))
+                        position_async_tasks.append(add_to_tasks_async(tasks_service, f"FLASH CRASH SL: {symbol}", crash_msg.replace('**', '')))
+                        pos["crash_alert_sent"] = True
+
+                    entry_date_str = pos.get("date", today_str)
+                    try:
+                        entry_date = datetime.strptime(entry_date_str, '%Y-%m-%d').date()
+                        days_open = (uk_now.date() - entry_date).days
+                        if days_open >= 4 and not pos.get("stale_alert_sent", False):
+                            stale_msg = (
+                                f"⏳ **ZAMROŻONY KAPITAŁ DLA {symbol}!**\n\n"
+                                f"Pozycja otwarta od {days_open} dni bez osiągnięcia TP1 ani SL.\n"
+                                f"💰 Cena obecna: `{display_price}` (Wejście: `£{entry_price:.4f}`)\n"
+                                f"💡 Rozważ zamknięcie z ręki i zwolnienie środków na inne altcoiny."
+                            )
+                            position_async_tasks.append(send_telegram_alert_async(http_client, stale_msg))
+                            position_async_tasks.append(add_to_tasks_async(tasks_service, f"ZAMROŻONY KAPITAŁ: {symbol}", stale_msg.replace('**', '')))
+                            pos["stale_alert_sent"] = True
+                    except Exception as e:
+                        logging.error(f"Błąd sprawdzania starych pozycji dla {symbol}: {e}")
 
                     if not pos.get("tp1_hit", False):
                         if high_gbp >= tp1_price:
@@ -565,27 +605,21 @@ async def main():
                     'trend': trend_txt, 'status': status_txt, 'div_tag': div_tag
                 })
 
-                cached_data = cache.get(symbol, {})
-                if not isinstance(cached_data, dict):
-                    cached_data = {}
+                symbol_cache = cache.get(symbol, {})
+                if not isinstance(symbol_cache, dict):
+                    symbol_cache = {}
 
-                last_ts = cached_data.get("ts", 0)
-                last_signal = cached_data.get("signal", "NONE")
-                last_count = cached_data.get("count", 0)
+                last_ts = symbol_cache.get("ts", 0)
+                last_signal = symbol_cache.get("signal", "NONE")
+                last_alert_time = symbol_cache.get("last_alert_time", 0.0)
+
+                current_epoch = time.time()
+                is_cooldown_active = (current_signal_type == last_signal) and (current_epoch - last_alert_time < SIGNAL_COOLDOWN_SECONDS)
 
                 should_alert = False
-                current_count = 0
-
-                if current_signal_type != "NONE":
-                    if last_signal == current_signal_type and last_ts == ts_closed:
-                        current_count = last_count + 1
-                        if current_count <= 2:
-                            should_alert = True
-                    else:
-                        current_count = 1
+                if current_signal_type != "NONE" and not is_cooldown_active:
+                    if last_ts != ts_closed or last_signal != current_signal_type:
                         should_alert = True
-                else:
-                    current_count = 0
 
                 signal_to_save = current_signal_type if current_signal_type != "NONE" else (last_signal if last_ts == ts_closed else "NONE")
 
@@ -603,7 +637,9 @@ async def main():
                             "tp1_hit": False,
                             "highest_price": high_gbp,
                             "atr_gbp": atr_gbp,
-                            "ts": ts_closed
+                            "date": today_str,
+                            "stale_alert_sent": False,
+                            "crash_alert_sent": False
                         }
 
                     if current_signal_type == "BUY_MEGA":
@@ -672,22 +708,22 @@ async def main():
                 cache[symbol] = {
                     "ts": ts_closed, 
                     "signal": signal_to_save,
-                    "count": current_count if current_signal_type != "NONE" else 0
+                    "last_alert_time": current_epoch if should_alert else last_alert_time
                 }
+                success_count += 1
 
             cache["active_positions"] = active_positions
 
-            # Wysyłka komunikatów pozycji (TP1, SL, Trailing SL)
             if position_async_tasks:
                 await asyncio.gather(*position_async_tasks)
 
-            # RAPORT GITHUB STEP SUMMARY
-            write_github_step_summary(digest_summary_rows)
+            elapsed = round(time.time() - start_time, 2)
+            health_summary = f"🩺 **Autodiagnostyka Krypto:** Przeanalizowano `{success_count}/{total_checked}` par w `{elapsed}s`. System operacyjny stabilny."
+            logging.info(health_summary.replace('**', '').replace('`', ''))
 
-            # OBSŁUGA KOMEND TELEGRAM
+            write_github_step_summary(digest_summary_rows, health_msg=health_summary)
             await process_telegram_commands_async(http_client, cache, digest_summary_rows)
 
-            # WYSYŁKA ALERTÓW ORAZ SHEETS
             if pending_alerts:
                 alert_coroutines = []
                 if len(pending_alerts) <= 3:
@@ -723,7 +759,6 @@ async def main():
                 except Exception as e:
                     logging.error(f"Nie udało się zapisać wierszy w Google Sheets: {e}")
 
-            # CODZIENNY DIGEST AFTER 21:00
             if uk_now.hour >= 21 and cache.get("DIGEST_DATE") != today_str:
                 if digest_lines:
                     digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines) + "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
@@ -738,7 +773,6 @@ async def main():
         finally:
             await exchange.close()
 
-    elapsed = round(time.time() - start_time, 2)
     logging.info(f"Skaner Krypto zakończył działanie w czasie: {elapsed}s.")
 
 
