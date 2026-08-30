@@ -1,35 +1,39 @@
-name: Skaner Krypto
+name: Run Crypto Scanner
 
 on:
   schedule:
+    # Uruchamianie automatyczne co 15 minut
     - cron: '*/15 * * * *'
-  workflow_dispatch:
-
-permissions:
-  contents: write
+  workflow_dispatch: # Przycisk do ręcznego uruchamiania z panelu GitHub
+  push:
+    branches:
+      - main
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Pozwala skryptowi zapisywać i commitować plik cache_krypto.json
 
     steps:
       - name: Pobranie kodu z repozytorium
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Konfiguracja środowiska Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip' # Pamięć podręczna pip – skraca czas instalacji pakietów do kilkunastu sekund
 
       - name: Instalacja wymaganych pakietów
         run: |
           python -m pip install --upgrade pip
-          pip install ccxt gspread pandas requests google-api-python-client google-auth-httplib2 google-auth-oauthlib
+          pip install -r requirements.txt
 
       - name: Wykonanie skanera Krypto
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
           GOOGLE_TASK_LIST_ID: ${{ secrets.GOOGLE_TASK_LIST_ID }}
@@ -37,9 +41,7 @@ jobs:
         run: python main.py
 
       - name: Zapisz plik cache do repozytorium
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add cache_krypto.json
-          git commit -m "Auto-update cache_krypto.json [skip ci]" || exit 0
-          git push
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "auto: aktualizacja cache_krypto.json [skip ci]"
+          file_pattern: "cache_krypto.json"
