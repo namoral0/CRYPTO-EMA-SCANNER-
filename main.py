@@ -128,7 +128,7 @@ def write_github_step_summary(digest_rows):
             logging.error(f"Błąd zapisu GITHUB_STEP_SUMMARY: {e}")
 
 async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache: dict, digest_rows: list):
-    """Obsługa interaktywnych komend (/status, /stan) na Telegramie z użyciem HTTPX."""
+    """Obsługa interaktywnych komend (/status, /stan) na Telegramie."""
     if not TELEGRAM_TOKEN:
         return
     
@@ -154,7 +154,10 @@ async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache:
                     status_msg = "📋 **AKTUALNY STAN RYNKU (KRYPTO)**\n\n"
                     for r in digest_rows:
                         sym_link = f"[{r['symbol']}](https://live.trading212.com/)"
-                        status_msg += f"🪙 {sym_link} — {r['price']}\n  └ RSI 4h: {r['rsi']} | Trend: {r['trend']} | Stan: {r['status']}{r.get('div_tag', '')}\n\n"
+                        div = r.get('div_tag', '')
+                        status_msg += f"🪙 {sym_link}: {r['price']} | RSI: {r['rsi']} | {r['status']}{div}\n"
+                    
+                    status_msg += "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
                     
                     target_chat = chat_id or TELEGRAM_CHAT_ID
                     if target_chat:
@@ -312,24 +315,34 @@ async def main():
 
     async with httpx.AsyncClient() as http_client:
         try:
-            # 1. Pobieranie wstępnych danych BTC i Tickerów
+            # 1. Pobieranie danych BTC i Tickerów
             btc_tasks = [
                 fetch_ticker_safe(exchange, "GBP/USD"),
                 fetch_ohlcv_retry_async(exchange, "BTC/GBP", "1d", 250),
                 fetch_ohlcv_retry_async(exchange, "BTC/GBP", "4h", 300),
+                fetch_ohlcv_retry_async(exchange, "BTC/GBP", "15m", 100),
                 fetch_ohlcv_retry_async(exchange, "BTC/USD", "1d", 250),
                 fetch_ohlcv_retry_async(exchange, "BTC/USD", "4h", 300),
+                fetch_ohlcv_retry_async(exchange, "BTC/USD", "15m", 100),
             ]
             
-            ticker_gbp, btc_gbp_1d, btc_gbp_4h, btc_usd_1d, btc_usd_4h = await asyncio.gather(*btc_tasks)
+            ticker_gbp, btc_gbp_1d, btc_gbp_4h, btc_gbp_15m, btc_usd_1d, btc_usd_4h, btc_usd_15m = await asyncio.gather(*btc_tasks)
 
             if ticker_gbp and ticker_gbp.get('last'):
                 usd_gbp_rate = 1.0 / ticker_gbp['last']
 
             cols = ['ts', 'o', 'h', 'l', 'close', 'v']
             btc_cache = {
-                "BTC/GBP": {"1d": pd.DataFrame(btc_gbp_1d, columns=cols), "4h": pd.DataFrame(btc_gbp_4h, columns=cols)},
-                "BTC/USD": {"1d": pd.DataFrame(btc_usd_1d, columns=cols), "4h": pd.DataFrame(btc_usd_4h, columns=cols)},
+                "BTC/GBP": {
+                    "1d": pd.DataFrame(btc_gbp_1d, columns=cols),
+                    "4h": pd.DataFrame(btc_gbp_4h, columns=cols),
+                    "15m": pd.DataFrame(btc_gbp_15m, columns=cols)
+                },
+                "BTC/USD": {
+                    "1d": pd.DataFrame(btc_usd_1d, columns=cols),
+                    "4h": pd.DataFrame(btc_usd_4h, columns=cols),
+                    "15m": pd.DataFrame(btc_usd_15m, columns=cols)
+                },
             }
 
             # Wyliczenie makro-trendu BTC raz przed pętlą symboli
@@ -339,8 +352,22 @@ async def main():
                 ema_200 = df_b_1d['close'].ewm(span=200, adjust=False).mean().iloc[-1]
                 btc_macro_bullish[btc_sym] = bool(df_b_1d['close'].iloc[-1] > ema_200)
 
-            # 2. Równoległe pobranie danych dla wszystkich symboli
-            results = await asyncio.gather(*[fetch_symbol_data(exchange, sym) for sym in SYMBOLS])
+            # 2. Pobieranie pozostałych symboli (z pominięciem tych, które są już w btc_cache)
+            fetch_tasks = [fetch_symbol_data(exchange, sym) for sym in SYMBOLS if sym not in btc_cache]
+            fetched_results = await asyncio.gather(*fetch_tasks)
+
+            results = []
+            for sym in SYMBOLS:
+                if sym in btc_cache:
+                    results.append((
+                        sym,
+                        btc_cache[sym]["1d"],
+                        btc_cache[sym]["4h"],
+                        btc_cache[sym]["15m"]
+                    ))
+                else:
+                    res = next((r for r in fetched_results if r[0] == sym), (sym, None, None, None))
+                    results.append(res)
 
             digest_lines = []
             digest_summary_rows = []
@@ -440,10 +467,8 @@ async def main():
                     tp1_price = pos.get("tp1_price", entry_price + (1.5 * atr_gbp))
                     pos_atr_gbp = pos.get("atr_gbp", atr_gbp)
 
-                    # Aktualizacja najwyższej zarejestrowanej ceny
                     pos["highest_price"] = max(pos.get("highest_price", price_gbp), high_gbp)
 
-                    # ETAP 1: Przed osiągnięciem TP1
                     if not pos.get("tp1_hit", False):
                         if high_gbp >= tp1_price:
                             tp1_msg = (
@@ -467,7 +492,6 @@ async def main():
                             rows_to_append_sheets.append([now_str, symbol, "SL_HIT_CLOSED 🔴", display_price, f"RSI: {rsi_4h_closed}", "-", "-"])
                             del active_positions[symbol]
 
-                    # ETAP 2: Po osiągnięciu TP1 (Prowadzenie pozycji Trailing SL)
                     else:
                         new_trailing_sl = pos["highest_price"] - (2.0 * pos_atr_gbp)
                         if new_trailing_sl > pos["sl_price"]:
@@ -534,7 +558,7 @@ async def main():
                 div_tag = " | 📈 BYCZA DYWERGENCJA" if has_bullish_div else ""
                 
                 sym_link = f"[{symbol}](https://live.trading212.com/)"
-                digest_lines.append(f"🪙 {sym_link} — {display_price}\n  └ RSI 4h: {rsi_4h_closed} | Trend: {trend_txt} | Stan: {status_txt}{div_tag}\n\n")
+                digest_lines.append(f"🪙 {sym_link}: {display_price} | RSI: {rsi_4h_closed} | {status_txt}{div_tag}\n")
                 digest_summary_rows.append({
                     'symbol': symbol, 'price': display_price,
                     'rsi': rsi_4h_closed, 'adx': round(adx_closed,1),
@@ -702,7 +726,7 @@ async def main():
             # CODZIENNY DIGEST AFTER 21:00
             if uk_now.hour >= 21 and cache.get("DIGEST_DATE") != today_str:
                 if digest_lines:
-                    digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines)
+                    digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines) + "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
                     await asyncio.gather(
                         send_telegram_alert_async(http_client, digest_msg),
                         add_to_tasks_async(tasks_service, f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
