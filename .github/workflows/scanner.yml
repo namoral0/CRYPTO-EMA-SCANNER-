@@ -1,10 +1,12 @@
-name: Crypto Scanner Schedule
+name: Skaner Krypto
 
 on:
   schedule:
-    # Uruchamianie automatyczne co 15 minut (od 0 do 59 minuty)
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Umożliwia ręczne uruchomienie skryptu przyciskiem w GitHubie
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   run-scanner:
@@ -12,29 +14,31 @@ jobs:
 
     steps:
       - name: Pobranie kodu z repozytorium
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Konfiguracja środowiska Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: '3.10'
 
       - name: Instalacja wymaganych pakietów
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then 
-            pip install -r requirements.txt
-          else 
-            pip install ccxt pandas gspread requests google-api-python-client google-auth
-          fi
+          pip install ccxt gspread pandas requests google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
       - name: Wykonanie skanera Krypto
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
           GOOGLE_TASK_LIST_ID: ${{ secrets.GOOGLE_TASK_LIST_ID }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          FIXED_RISK_GBP: "50.0"
         run: python main.py
+
+      - name: Zapisz plik cache do repozytorium
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add cache_krypto.json
+          git commit -m "Auto-update cache_krypto.json [skip ci]" || exit 0
+          git push
