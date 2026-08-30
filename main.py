@@ -33,7 +33,7 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-# Sztywne ryzyko £10 (zapobiega nadpisywaniu starymi zmiennymi z GitHub Secrets)
+# Sztywne ryzyko £10 GBP
 FIXED_RISK_GBP = 10.0
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
@@ -48,7 +48,7 @@ KRAKEN_SEMAPHORE = asyncio.Semaphore(3)
 
 # --- 3. INICJALIZACJA USŁUG I ASYNCHRONICZNE I/O ---
 def init_google_services():
-    """Jednorazowa autoryzacja Google Tasks i Google Sheets bez ostrzeżeń w logach."""
+    """Jednorazowa autoryzacja Google Tasks i Google Sheets."""
     if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS:
         return None, None
     try:
@@ -151,7 +151,7 @@ def check_bullish_divergence(df_4h, lookback=35):
     return False
 
 def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
-    """Oblicza optymalną wielkość pozycji w GBP dla ustalonego ryzyka (£10)."""
+    """Oblicza optymalną wielkość pozycji w GBP dla ryzyka £10."""
     try:
         if price_gbp <= sl_gbp or sl_gbp <= 0:
             return 0.0
@@ -164,7 +164,7 @@ def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
         return 0.0
 
 def compute_indicators(df_1d, df_4h, df_15m):
-    """Wyliczanie kompletnego zestawu wskaźników technicznych w pamięci RAM."""
+    """Wyliczanie wskaźników technicznych w pamięci RAM."""
     # 1D EMA 200
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
 
