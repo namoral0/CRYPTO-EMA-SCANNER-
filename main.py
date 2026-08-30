@@ -6,6 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import ccxt
+import gspread
 import pandas as pd
 import requests
 
@@ -28,6 +29,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID", "@default")
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
@@ -75,6 +77,20 @@ def add_to_tasks(title, notes):
     except Exception as e:
         logging.error(f"Błąd Tasks: {e}")
 
+def get_google_sheet():
+    if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS or not SPREADSHEET_ID:
+        return None
+    try:
+        creds_dict = json.loads(GOOGLE_TASKS_CREDENTIALS)
+        creds = Credentials.from_service_account_info(
+            creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets']
+        )
+        client = gspread.authorize(creds)
+        return client.open_by_key(SPREADSHEET_ID).sheet1
+    except Exception as e:
+        logging.error(f"Błąd autoryzacji Google Sheets dla Krypto: {e}")
+        return None
+
 
 # --- 4. GŁÓWNA PĘTLA APLIKACJI ---
 def main():
@@ -82,8 +98,10 @@ def main():
     logging.info("Uruchamianie skanera Krypto (Kraken CCXT)...")
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
+    now_str = uk_now.strftime("%Y-%m-%d %H:%M")
     
     cache = load_cache()
+    sheet = get_google_sheet()
     exchange = ccxt.kraken({'enableRateLimit': True})
     usd_gbp_rate = 0.78
     
@@ -201,7 +219,6 @@ def main():
             avg_vol = df_4h['Vol_MA'].iloc[-2]
             vol_multiplier = current_vol / avg_vol if not pd.isna(avg_vol) and avg_vol > 0 else 0
             
-            # Wolumen skokowy uznawany TYLKO przy zielonej świecy
             is_green_candle_4h = df_4h['close'].iloc[-2] > df_4h['o'].iloc[-2]
             is_volume_spike = (vol_multiplier > 1.4) and is_green_candle_4h
             
@@ -357,23 +374,47 @@ def main():
                         f"🔗 {tv_crypto_link} | {kraken_trade_link}"
                     )
 
-                pending_alerts.append((task_title, msg, display_symbol, status_txt))
+                pending_alerts.append((
+                    task_title, msg, display_symbol, status_txt,
+                    {
+                        'symbol': display_symbol,
+                        'signal': current_signal_type,
+                        'price': display_price,
+                        'rsi': rsi_4h_closed,
+                        'sl': sl_str,
+                        'tp': tp_str
+                    }
+                ))
 
             cache[symbol] = {"ts": ts_closed, "signal": signal_to_save}
         
         except Exception as e:
             logging.error(f"Błąd skanera dla {symbol}: {e}")
 
-    # Sekwencyjna wysyłka powiadomień
+    # Sekwencyjna wysyłka powiadomień oraz zapis do Google Sheets
     if pending_alerts:
         if len(pending_alerts) <= 3:
-            for task_title, msg, _, _ in pending_alerts:
+            for task_title, msg, _, _, meta in pending_alerts:
                 send_telegram_alert(msg)
                 add_to_tasks(task_title, msg.replace('**', ''))
+                if sheet:
+                    try:
+                        sheet.append_row([
+                            now_str,
+                            meta['symbol'],
+                            meta['signal'],
+                            meta['price'],
+                            f"RSI: {meta['rsi']}",
+                            f"SL: {meta['sl']}",
+                            f"TP: {meta['tp']}"
+                        ])
+                        logging.info(f"Zapisano transakcję {meta['symbol']} do Dziennika w Google Sheets")
+                    except Exception as e:
+                        logging.error(f"Nie udało się zapisać wiersza w Google Sheets: {e}")
         else:
             lawina_title = f"🚨 LAWINOWA ZMIANA NA RYNKU: {len(pending_alerts)} ALERTÓW!"
             lawina_msg = f"⚠️ **ZMASOWANA ZMIANA STANU RYNKU ({len(pending_alerts)} MONET)**\n\nWygaszenie pojedynczych alertów – rynek reaguje grupowo:\n\n"
-            for _, _, sym, stat in pending_alerts:
+            for _, _, sym, stat, _ in pending_alerts:
                 lawina_msg += f"• **{sym}**: {stat}\n"
             lawina_msg += "\n*Sprawdź szczegóły w aplikacji lub poczekaj na digest.*"
             
