@@ -32,7 +32,7 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID", "@default")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-FIXED_RISK_GBP = 50.0  # Domyślne ryzyko kwotowe £50 na transakcję
+FIXED_RISK_GBP = float(os.getenv("FIXED_RISK_GBP", "50.0"))
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
@@ -44,7 +44,7 @@ CACHE_FILE = "cache_krypto.json"
 
 # --- 3. INICJALIZACJA USŁUG I CACHE ---
 def init_google_services():
-    """Jednorazowa autoryzacja Google Tasks i Google Sheets."""
+    """Jednorazowa autoryzacja Google Tasks i Google Sheets bez ostrzeżeń w logach."""
     if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS:
         return None, None
     try:
@@ -55,7 +55,8 @@ def init_google_services():
         ]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         
-        tasks_service = build('tasks', 'v1', credentials=creds)
+        # cache_discovery=False eliminuje ostrzeżenie: file_cache is only supported with oauth2client
+        tasks_service = build('tasks', 'v1', credentials=creds, cache_discovery=False)
         sheet_client = gspread.authorize(creds)
         sheet = sheet_client.open_by_key(SPREADSHEET_ID).sheet1 if SPREADSHEET_ID else None
         
@@ -136,8 +137,8 @@ def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
         return 0.0
 
 def compute_indicators(df_1d, df_4h, df_15m):
-    """Oblicza pełny zestaw wskaźników technicznych w pamięci RAM."""
-    # 1D EMA
+    """Oblicza komplet wskaźników technicznych w pamięci podręcznej (Pandas)."""
+    # 1D EMA 200
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
 
     # 4H EMA, BB, RSI, ATR, ADX
@@ -185,7 +186,7 @@ def compute_indicators(df_1d, df_4h, df_15m):
     return df_1d, df_4h, df_15m
 
 
-# --- 5. ASYNCHRONICZNE POBIERANIE Z RETRY ---
+# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH ---
 async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retries=3, delay=1.0):
     """Pobiera świece asynchronicznie z ponawianiem próby przy błędzie."""
     for attempt in range(retries):
@@ -197,7 +198,7 @@ async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retrie
             await asyncio.sleep(delay)
 
 async def fetch_symbol_data(exchange, symbol):
-    """Pobiera równolegle ramy 1D, 4H, 15M dla wybranego symbolu."""
+    """Pobiera równolegle ramy 1D, 4H, 15M dla danego symbolu."""
     try:
         res_1d, res_4h, res_15m = await asyncio.gather(
             fetch_ohlcv_retry_async(exchange, symbol, "1d", 250),
@@ -227,7 +228,7 @@ async def main():
     usd_gbp_rate = 0.78
 
     try:
-        # 1. RÓWNOLEGŁE POBRANIE DANYCH BAZOWYCH (KURS GBP/USD ORAZ DANE BTC)
+        # 1. RÓWNOLEGŁE POBRANIE DANYCH BAZOWYCH
         btc_tasks = [
             exchange.fetch_ticker("GBP/USD"),
             fetch_ohlcv_retry_async(exchange, "BTC/GBP", "1d", 250),
@@ -247,7 +248,7 @@ async def main():
             "BTC/USD": {"1d": pd.DataFrame(btc_usd_1d, columns=cols), "4h": pd.DataFrame(btc_usd_4h, columns=cols)},
         }
 
-        # 2. RÓWNOLEGŁE POBRANIE WSZYSTKICH MONET Z SYMBOLS
+        # 2. RÓWNOLEGŁE POBRANIE WSZYSTKICH MONET
         results = await asyncio.gather(*[fetch_symbol_data(exchange, sym) for sym in SYMBOLS])
 
         digest_lines = []
@@ -261,7 +262,6 @@ async def main():
             quote_currency = symbol.split('/')[1]
             btc_symbol = f"BTC/{quote_currency}"
 
-            # Obliczenie wskaźników
             df_1d, df_4h, df_15m = compute_indicators(df_1d, df_4h, df_15m)
 
             # BTC Macro Guard
@@ -275,7 +275,7 @@ async def main():
             adx_closed = df_4h['ADX'].iloc[-2]
             is_trending_4h = adx_closed > 25
 
-            # Bycza Dywergencja RSI
+            # Detekcja byczej dywergencji
             has_bullish_div = check_bullish_divergence(df_4h)
 
             # Siła względna (RS vs BTC)
@@ -328,7 +328,7 @@ async def main():
             tp_str = f"£{tp_calc_gbp:.4f}" if tp_calc_gbp < 1 else f"£{tp_calc_gbp:.2f}"
             tp_str += " (Trailing ATR)" if is_uptrend_1d else " (BB Upper)"
 
-            # Wielkość pozycji przy stałym ryzyku £50
+            # Wyliczenie wielkości pozycji dla ryzyka £50 GBP
             position_gbp = calculate_position_size(price_gbp, sl_calc_gbp, FIXED_RISK_GBP)
             pos_size_str = f"£{position_gbp:.2f}" if position_gbp > 0 else "N/A"
 
@@ -466,7 +466,7 @@ async def main():
 
             cache[symbol] = {"ts": ts_closed, "signal": signal_to_save}
 
-        # 3. ZBIORCZA WYSYŁKA ALERTÓW ORAZ WERSJA BATCH W GOOGLE SHEETS
+        # 3. ZBIORCZA WYSYŁKA ALERTÓW ORAZ BATCH DO GOOGLE SHEETS
         if pending_alerts:
             rows_to_append = []
             if len(pending_alerts) <= 3:
@@ -493,7 +493,7 @@ async def main():
                 send_telegram_alert(lawina_msg)
                 add_to_tasks(tasks_service, lawina_title, lawina_msg.replace('**', ''))
 
-            # Jednorazowe zapisanie wszystkich wierszy do arkusza Google
+            # Wpisanie wierszy zbiorczo
             if sheet and rows_to_append:
                 try:
                     sheet.append_rows(rows_to_append)
@@ -512,7 +512,7 @@ async def main():
         save_cache(cache)
 
     finally:
-        # Prawidłowe i bezpieczne zamknięcie sesji API Krakena
+        # Zamknięcie sesji asynchronicznej CCXT
         await exchange.close()
 
     elapsed = round(time.time() - start_time, 2)
