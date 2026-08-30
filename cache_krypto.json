@@ -1,39 +1,48 @@
 {
   "DIGEST_DATE": "2026-08-28",
   "TAO/USD": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "NONE",
+    "count": 0
   },
   "BTC/GBP": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "NONE",
+    "count": 0
   },
   "ETH/GBP": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "NONE",
+    "count": 0
   },
   "SOL/GBP": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "NONE",
+    "count": 0
   },
   "XRP/GBP": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "NONE",
+    "count": 0
   },
   "RENDER/USD": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "NONE",
+    "count": 0
   },
   "SUI/GBP": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "BUY_MEGA",
+    "count": 1
   },
   "LINK/GBP": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "NONE",
+    "count": 0
   },
   "AAVE/GBP": {
-    "ts": 1788062400000,
-    "signal": "NONE"
+    "ts": 1788076800000,
+    "signal": "NONE",
+    "count": 0
   }
 }
