@@ -33,7 +33,6 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-# Sztywne ryzyko £10 GBP
 FIXED_RISK_GBP = 10.0
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
@@ -72,10 +71,13 @@ def load_cache():
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                if "active_positions" not in data:
+                    data["active_positions"] = {}
+                return data
         except Exception as e:
             logging.error(f"Nie można załadować pliku cache: {e}")
-    return {}
+    return {"active_positions": {}}
 
 def save_cache(cache_data):
     try:
@@ -84,12 +86,13 @@ def save_cache(cache_data):
     except Exception as e:
         logging.error(f"Nie udało się zapisać cache: {e}")
 
-async def send_telegram_alert_async(msg):
+async def send_telegram_alert_async(msg, custom_chat_id=None):
     """Nieblokujące wysyłanie wiadomości na Telegram."""
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    chat_id = custom_chat_id or TELEGRAM_CHAT_ID
+    if not TELEGRAM_TOKEN or not chat_id:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
     try:
         await asyncio.to_thread(requests.post, url, json=payload, timeout=10)
     except Exception as e:
@@ -109,6 +112,47 @@ async def add_to_tasks_async(tasks_service, title, notes):
         logging.info(f"Dodano zadanie do Google Tasks: {title}")
     except Exception as e:
         logging.error(f"Błąd Google Tasks: {e}")
+
+def write_github_step_summary(digest_rows):
+    """Generuje tabelę Markdown bezpośrednio w podsumowaniu GitHub Actions."""
+    summary_file = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_file:
+        try:
+            with open(summary_file, "a", encoding="utf-8") as f:
+                f.write("### 📊 Podsumowanie Skanera Krypto\n\n")
+                f.write("| Moneta | Cena | RSI 4H | ADX 4H | Trend 1D | Stan |\n")
+                f.write("| --- | --- | --- | --- | --- | --- |\n")
+                for r in digest_rows:
+                    f.write(f"| **{r['symbol']}** | {r['price']} | {r['rsi']} | {r['adx']} | {r['trend']} | {r['status']} |\n")
+        except Exception as e:
+            logging.error(f"Błąd zapisu GITHUB_STEP_SUMMARY: {e}")
+
+async def process_telegram_commands_async(cache, digest_rows):
+    """Obsługa interaktywnych komend (/status, /stan) na Telegramie."""
+    if not TELEGRAM_TOKEN:
+        return
+    last_offset = cache.get("telegram_update_offset", 0)
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_offset + 1}&timeout=2"
+    try:
+        resp = await asyncio.to_thread(requests.get, url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            for update in data.get("result", []):
+                cache["telegram_update_offset"] = update["update_id"]
+                msg_obj = update.get("message", {})
+                text = msg_obj.get("text", "").strip().lower()
+                chat_id = msg_obj.get("chat", {}).get("id")
+
+                if text in ["/status", "/stan", "/start"]:
+                    t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
+                    status_msg = "📊 **AKTUALNY STAN RYNKU (NA ŻĄDANIE)**\n\n"
+                    for r in digest_rows:
+                        status_msg += f"🪙 **{r['symbol']}**: `{r['price']}` | RSI: `{r['rsi']}` | {r['status']}\n"
+                    status_msg += f"\n🔗 {t212_link}"
+                    if chat_id:
+                        await send_telegram_alert_async(status_msg, custom_chat_id=chat_id)
+    except Exception as e:
+        logging.error(f"Błąd przetwarzania komend Telegram: {e}")
 
 
 # --- 4. FUNKCJE ANALITYCZNE I MATEMATYCZNE ---
@@ -151,7 +195,7 @@ def check_bullish_divergence(df_4h, lookback=35):
     return False
 
 def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
-    """Oblicza optymalną wielkość pozycji w GBP dla ryzyka £10."""
+    """Oblicza wielkość pozycji w GBP dla ryzyka £10."""
     try:
         if price_gbp <= sl_gbp or sl_gbp <= 0:
             return 0.0
@@ -164,7 +208,7 @@ def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
         return 0.0
 
 def compute_indicators(df_1d, df_4h, df_15m):
-    """Wyliczanie wskaźników technicznych w pamięci RAM."""
+    """Wyliczanie zestawu wskaźników technicznych."""
     # 1D EMA 200
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
 
@@ -213,9 +257,9 @@ def compute_indicators(df_1d, df_4h, df_15m):
     return df_1d, df_4h, df_15m
 
 
-# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH Z SEMAFOREM ---
+# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH ---
 async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retries=3, delay=1.0):
-    """Pobiera świece asynchronicznie z limitem połączeń."""
+    """Pobiera świece z limitem semafora."""
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
             try:
@@ -226,12 +270,10 @@ async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retrie
                 await asyncio.sleep(delay)
 
 async def fetch_ticker_safe(exchange, symbol):
-    """Pobiera kurs rynkowy z użyciem semafora."""
     async with KRAKEN_SEMAPHORE:
         return await exchange.fetch_ticker(symbol)
 
 async def fetch_symbol_data(exchange, symbol):
-    """Pobiera dane 1D, 4H i 15M dla wybranego aktywa."""
     try:
         res_1d, res_4h, res_15m = await asyncio.gather(
             fetch_ohlcv_retry_async(exchange, symbol, "1d", 250),
@@ -285,7 +327,11 @@ async def main():
         results = await asyncio.gather(*[fetch_symbol_data(exchange, sym) for sym in SYMBOLS])
 
         digest_lines = []
+        digest_summary_rows = []
         pending_alerts = []
+        rows_to_append_sheets = []
+
+        active_positions = cache.get("active_positions", {})
 
         for symbol, df_1d, df_4h, df_15m in results:
             if df_1d is None or len(df_1d) < 30 or len(df_4h) < 100 or len(df_15m) < 20:
@@ -308,7 +354,6 @@ async def main():
             adx_closed = df_4h['ADX'].iloc[-2]
             is_trending_4h = adx_closed > 25
 
-            # Detekcja byczej dywergencji (Pivot Lows)
             has_bullish_div = check_bullish_divergence(df_4h)
 
             # Siła względna (RS vs BTC)
@@ -329,6 +374,9 @@ async def main():
             rsi_15m_closed = round(df_15m['RSI'].iloc[-2], 1)
             
             close_closed = df_4h['close'].iloc[-2]
+            high_closed = df_4h['h'].iloc[-2]
+            low_closed = df_4h['l'].iloc[-2]
+
             bb_upper_closed = df_4h['BB_upper'].iloc[-2]
             bb_lower_closed = df_4h['BB_lower'].iloc[-2]
             avg_atr = df_4h['ATR_MA'].iloc[-2]
@@ -348,11 +396,15 @@ async def main():
 
             if symbol.endswith("/USD"):
                 price_gbp = close_closed * usd_gbp_rate
+                high_gbp = high_closed * usd_gbp_rate
+                low_gbp = low_closed * usd_gbp_rate
                 display_price = f"£{price_gbp:.4f}" if price_gbp < 1 else f"£{price_gbp:.2f}"
                 sl_calc_gbp = max(0, (close_closed - 1.5 * atr_val) * usd_gbp_rate)
                 tp_calc_gbp = tp_target_raw * usd_gbp_rate
             else:
                 price_gbp = close_closed
+                high_gbp = high_closed
+                low_gbp = low_closed
                 display_price = f"£{close_closed:.4f}" if close_closed < 1 else f"£{close_closed:.2f}"
                 sl_calc_gbp = max(0, close_closed - 1.5 * atr_val)
                 tp_calc_gbp = tp_target_raw
@@ -361,10 +413,48 @@ async def main():
             tp_str = f"£{tp_calc_gbp:.4f}" if tp_calc_gbp < 1 else f"£{tp_calc_gbp:.2f}"
             tp_str += " (Trailing ATR)" if is_uptrend_1d else " (BB Upper)"
 
-            # Precyzyjne wyliczenie wielkości pozycji dla ryzyka FIXED_RISK_GBP (£10)
             position_gbp = calculate_position_size(price_gbp, sl_calc_gbp, FIXED_RISK_GBP)
             pos_size_str = f"£{position_gbp:.2f}" if position_gbp > 0 else "N/A"
 
+            # --- A. WERYFIKACJA DZIENNIKA TRANSAKCJI I ALERT BREAK-EVEN ---
+            if symbol in active_positions:
+                pos = active_positions[symbol]
+                entry_price = pos["entry_price"]
+                sl_price = pos["sl_price"]
+                tp_price = pos["tp_price"]
+
+                # 1. Sprawdzenie osięgnięcia Take Profit
+                if high_gbp >= tp_price:
+                    tp_msg = f"🎯 **TAKE PROFIT OSIĄGNIĘTY dla {symbol}!**\nCena osiągnęła cel `{tp_str}`. Zysk zrealizowany!"
+                    await send_telegram_alert_async(tp_msg)
+                    await add_to_tasks_async(tasks_service, f"TP OSIĄGNIĘTY: {symbol}", tp_msg.replace('**', ''))
+                    rows_to_append_sheets.append([now_str, symbol, "TP_HIT_SUCCESS 🟢", display_price, f"RSI: {rsi_4h_closed}", "-", "-"])
+                    del active_positions[symbol]
+
+                # 2. Sprawdzenie osiągnięcia Stop Loss
+                elif low_gbp <= sl_price:
+                    sl_msg = f"🔴 **STOP LOSS TRAFIONY dla {symbol}!**\nCena spadła do `{sl_str}`. Pozycja zamknięta na kontrolowanej stracie £10."
+                    await send_telegram_alert_async(sl_msg)
+                    await add_to_tasks_async(tasks_service, f"SL TRAFIONY: {symbol}", sl_msg.replace('**', ''))
+                    rows_to_append_sheets.append([now_str, symbol, "SL_HIT_CLOSED 🔴", display_price, f"RSI: {rsi_4h_closed}", "-", "-"])
+                    del active_positions[symbol]
+
+                # 3. Alert Break-Even (R/R >= 1:1)
+                elif not pos.get("be_alerted", False):
+                    risk_dist = entry_price - sl_price
+                    if risk_dist > 0 and price_gbp >= (entry_price + risk_dist):
+                        be_msg = (
+                            f"🛡 **PRZESUŃ STOP LOSS NA BREAK-EVEN dla {symbol}!**\n\n"
+                            f"Pozycja wygenerowała zysk równy ryzyku (£10)!\n"
+                            f"💰 **Aktualna cena:** `{display_price}`\n"
+                            f"🛡 **Przesuń SL na poziom wejścia:** `£{entry_price:.4f}`\n"
+                            f"Pozycja jest teraz całkowicie bezpieczna! 🚀"
+                        )
+                        await send_telegram_alert_async(be_msg)
+                        await add_to_tasks_async(tasks_service, f"BREAK-EVEN: {symbol}", be_msg.replace('**', ''))
+                        pos["be_alerted"] = True
+
+            # --- B. KALKULACJA SYGNAŁÓW KUPNA / SPRZEDAŻY ---
             base_buy, base_sell = (28, 70) if is_core else (22, 78)
             confirm_15m_buy, confirm_15m_sell = (38, 62) if is_core else (32, 68)
 
@@ -387,7 +477,6 @@ async def main():
             else:
                 is_base_buy = ((is_oversold_4h and (rsi_15m_closed <= confirm_15m_buy or close_closed <= bb_lower_closed)) or has_bullish_div) and not is_anomaly_candle
 
-            # Filtry bezpieczeństwa
             if is_trending_4h and not is_uptrend_1d and not has_bullish_div:
                 is_base_buy = False
             if not is_core and not is_btc_macro_bullish and not has_bullish_div:
@@ -413,6 +502,11 @@ async def main():
             div_tag = " | 📈 BYCZA DYWERGENCJA" if has_bullish_div else ""
             
             digest_lines.append(f"🪙 **{symbol}** — {display_price}\n  └ RSI: {rsi_4h_closed} | ADX: {round(adx_closed,1)} | Trend: {trend_txt} | Stan: {status_txt}{div_tag}\n")
+            digest_summary_rows.append({
+                'symbol': symbol, 'price': display_price,
+                'rsi': rsi_4h_closed, 'adx': round(adx_closed,1),
+                'trend': trend_txt, 'status': status_txt
+            })
 
             cached_data = cache.get(symbol, {})
             if not isinstance(cached_data, dict):
@@ -425,7 +519,6 @@ async def main():
             should_alert = False
             current_count = 0
 
-            # Limit maksymalnie 2 alertów na świecę 4H
             if current_signal_type != "NONE":
                 if last_signal == current_signal_type and last_ts == ts_closed:
                     current_count = last_count + 1
@@ -443,6 +536,15 @@ async def main():
                 t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
                 div_note = "\n📈 **Wykryto BYCZĄ DYWERGENCJĘ RSI (4H)!**\n" if has_bullish_div else ""
                 risk_label = int(FIXED_RISK_GBP) if FIXED_RISK_GBP.is_integer() else FIXED_RISK_GBP
+
+                if current_signal_type in ["BUY_MEGA", "BUY_SWING"]:
+                    active_positions[symbol] = {
+                        "entry_price": price_gbp,
+                        "sl_price": sl_calc_gbp,
+                        "tp_price": tp_calc_gbp,
+                        "be_alerted": False,
+                        "ts": ts_closed
+                    }
 
                 if current_signal_type == "BUY_MEGA":
                     rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)**"
@@ -513,14 +615,21 @@ async def main():
                 "count": current_count if current_signal_type != "NONE" else 0
             }
 
-        # 3. ZBIORCZA NIEBLOKUJĄCA WYSYŁKA ALERTÓW ORAZ BATCH DO GOOGLE SHEETS
+        cache["active_positions"] = active_positions
+
+        # --- C. GENEROWANIE RAPORTU DLA GITHUB STEP SUMMARY ---
+        write_github_step_summary(digest_summary_rows)
+
+        # --- D. OBSŁUGA KOMEND INTERAKTYWNYCH NA TELEGRAMIE (/status) ---
+        await process_telegram_commands_async(cache, digest_summary_rows)
+
+        # --- E. ZBIORCZA WYSYŁKA ALERTÓW ORAZ BATCH DO GOOGLE SHEETS ---
         if pending_alerts:
-            rows_to_append = []
             if len(pending_alerts) <= 3:
                 for task_title, msg, _, _, meta in pending_alerts:
                     await send_telegram_alert_async(msg)
                     await add_to_tasks_async(tasks_service, task_title, msg.replace('**', ''))
-                    rows_to_append.append([
+                    rows_to_append_sheets.append([
                         now_str, meta['symbol'], meta['signal'],
                         meta['price'], f"RSI: {meta['rsi']}",
                         f"SL: {meta['sl']}", f"TP: {meta['tp']}"
@@ -530,7 +639,7 @@ async def main():
                 lawina_msg = f"⚠️ **ZMASOWANA ZMIANA STANU RYNKU ({len(pending_alerts)} MONET)**\n\n"
                 for _, _, sym, stat, meta in pending_alerts:
                     lawina_msg += f"• **{sym}**: {stat}\n"
-                    rows_to_append.append([
+                    rows_to_append_sheets.append([
                         now_str, meta['symbol'], meta['signal'],
                         meta['price'], f"RSI: {meta['rsi']}",
                         f"SL: {meta['sl']}", f"TP: {meta['tp']}"
@@ -540,12 +649,12 @@ async def main():
                 await send_telegram_alert_async(lawina_msg)
                 await add_to_tasks_async(tasks_service, lawina_title, lawina_msg.replace('**', ''))
 
-            if sheet and rows_to_append:
-                try:
-                    await asyncio.to_thread(sheet.append_rows, rows_to_append)
-                    logging.info(f"Zapisano {len(rows_to_append)} transakcji zbiorczo do Dziennika w Google Sheets.")
-                except Exception as e:
-                    logging.error(f"Nie udało się zapisać wierszy w Google Sheets: {e}")
+        if sheet and rows_to_append_sheets:
+            try:
+                await asyncio.to_thread(sheet.append_rows, rows_to_append_sheets)
+                logging.info(f"Zapisano {len(rows_to_append_sheets)} wierszy w Google Sheets.")
+            except Exception as e:
+                logging.error(f"Nie udało się zapisać wierszy w Google Sheets: {e}")
 
         # CODZIENNY DIGEST AFTER 21:00
         if uk_now.hour >= 21 and cache.get("DIGEST_DATE") != today_str:
