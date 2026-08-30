@@ -29,7 +29,9 @@ logging.basicConfig(
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
-GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID", "@default")
+
+# Poprawka: 'or "@default"' zapobiega przejściu pustego ciągu "" z GitHub Secrets
+GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
 FIXED_RISK_GBP = float(os.getenv("FIXED_RISK_GBP", "50.0"))
@@ -120,11 +122,9 @@ def check_bullish_divergence(df_4h, lookback=35):
         if len(df_4h) < lookback + 5:
             return False
 
-        # Pomijamy bieżącą (niezamkniętą) świecę [-1], analizujemy zamknięte interwały
         sub_df = df_4h.iloc[-(lookback + 1):-1].copy().reset_index(drop=True)
         n = len(sub_df)
         
-        # Wyznaczanie punktów Swing Low (dołek niższy od 2 sąsiadów z lewej i prawej strony)
         pivot_lows = []
         for i in range(2, n - 2):
             is_pivot = (
@@ -139,7 +139,6 @@ def check_bullish_divergence(df_4h, lookback=35):
         if len(pivot_lows) < 2:
             return False
 
-        # Analizujemy dwa ostatnie zidentyfikowane punkty zwrotne
         prev_pivot = pivot_lows[-2]
         curr_pivot = pivot_lows[-1]
 
