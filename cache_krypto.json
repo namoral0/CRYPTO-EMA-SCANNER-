@@ -1,3 +1,39 @@
 {
-  "DIGEST_DATE": "2026-08-28"
+  "DIGEST_DATE": "2026-08-28",
+  "TAO/USD": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  },
+  "BTC/GBP": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  },
+  "ETH/GBP": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  },
+  "SOL/GBP": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  },
+  "XRP/GBP": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  },
+  "RENDER/USD": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  },
+  "SUI/GBP": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  },
+  "LINK/GBP": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  },
+  "AAVE/GBP": {
+    "ts": 1788048000000,
+    "signal": "NONE"
+  }
 }
