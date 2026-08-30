@@ -41,8 +41,11 @@ SYMBOLS = [
 ]
 CACHE_FILE = "cache_krypto.json"
 
+# Semafor ograniczający równoległe zapytania do API Krakena (ochrona przed Rate Limit 429)
+KRAKEN_SEMAPHORE = asyncio.Semaphore(3)
 
-# --- 3. INICJALIZACJA USŁUG I CACHE ---
+
+# --- 3. INICJALIZACJA USŁUG I ASYNCHRONICZNE I/O ---
 def init_google_services():
     """Jednorazowa autoryzacja Google Tasks i Google Sheets bez ostrzeżeń w logach."""
     if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS:
@@ -55,7 +58,6 @@ def init_google_services():
         ]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         
-        # cache_discovery=False eliminuje ostrzeżenie: file_cache is only supported with oauth2client
         tasks_service = build('tasks', 'v1', credentials=creds, cache_discovery=False)
         sheet_client = gspread.authorize(creds)
         sheet = sheet_client.open_by_key(SPREADSHEET_ID).sheet1 if SPREADSHEET_ID else None
@@ -81,44 +83,74 @@ def save_cache(cache_data):
     except Exception as e:
         logging.error(f"Nie udało się zapisać cache: {e}")
 
-def send_telegram_alert(msg):
+async def send_telegram_alert_async(msg):
+    """Nieblokujące wysyłanie wiadomości na Telegram (uruchamiane w wątku I/O)."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
+        await asyncio.to_thread(requests.post, url, json=payload, timeout=10)
     except Exception as e:
         logging.error(f"Nie udało się wysłać wiadomości na Telegram: {e}")
 
-def add_to_tasks(tasks_service, title, notes):
+async def add_to_tasks_async(tasks_service, title, notes):
+    """Nieblokujące dodawanie zadania do Google Tasks."""
     if not tasks_service:
         return
     try:
-        tasks_service.tasks().insert(
-            tasklist=GOOGLE_TASK_LIST_ID, 
-            body={'title': title, 'notes': notes}
-        ).execute()
+        await asyncio.to_thread(
+            lambda: tasks_service.tasks().insert(
+                tasklist=GOOGLE_TASK_LIST_ID, 
+                body={'title': title, 'notes': notes}
+            ).execute()
+        )
         logging.info(f"Dodano zadanie do Google Tasks: {title}")
     except Exception as e:
         logging.error(f"Błąd Google Tasks: {e}")
 
 
 # --- 4. FUNKCJE ANALITYCZNE I MATEMATYCZNE ---
-def check_bullish_divergence(df_4h):
-    """Wykrywa byczą dywergencję RSI na interwale 4H."""
+def check_bullish_divergence(df_4h, lookback=35):
+    """
+    Zaawansowana detekcja byczej dywergencji RSI na podstawie punktów zwrotnych (Pivot Lows).
+    Weryfikuje, czy powstaje niższy dołek cenowy z wyższym odczytem RSI (<45).
+    """
     try:
-        if len(df_4h) < 30:
+        if len(df_4h) < lookback + 5:
             return False
-        sub_df = df_4h.iloc[-22:-2]
-        min_prev_low_idx = sub_df['l'].idxmin()
-        prev_min_low = df_4h.loc[min_prev_low_idx, 'l']
-        prev_rsi = df_4h.loc[min_prev_low_idx, 'RSI']
+
+        # Pomijamy bieżącą (niezamkniętą) świecę [-1], analizujemy zamknięte interwały
+        sub_df = df_4h.iloc[-(lookback + 1):-1].copy().reset_index(drop=True)
+        n = len(sub_df)
         
-        curr_low = df_4h['l'].iloc[-2]
-        curr_rsi = df_4h['RSI'].iloc[-2]
-        
-        if curr_low < prev_min_low and curr_rsi > prev_rsi and curr_rsi < 45:
+        # Wyznaczanie punktów Swing Low (dołek niższy od 2 sąsiadów z lewej i prawej strony)
+        pivot_lows = []
+        for i in range(2, n - 2):
+            is_pivot = (
+                sub_df['l'].iloc[i] <= sub_df['l'].iloc[i-1] and 
+                sub_df['l'].iloc[i] <= sub_df['l'].iloc[i-2] and 
+                sub_df['l'].iloc[i] <= sub_df['l'].iloc[i+1] and 
+                sub_df['l'].iloc[i] <= sub_df['l'].iloc[i+2]
+            )
+            if is_pivot:
+                pivot_lows.append((i, sub_df['l'].iloc[i], sub_df['RSI'].iloc[i]))
+
+        if len(pivot_lows) < 2:
+            return False
+
+        # Analizujemy dwa ostatnie zidentyfikowane punkty zwrotne
+        prev_pivot = pivot_lows[-2]
+        curr_pivot = pivot_lows[-1]
+
+        price_lower = curr_pivot[1] < prev_pivot[1]
+        rsi_higher = curr_pivot[2] > prev_pivot[2]
+        rsi_oversold = curr_pivot[2] < 45
+        valid_distance = 3 <= (curr_pivot[0] - prev_pivot[0]) <= 25
+
+        if price_lower and rsi_higher and rsi_oversold and valid_distance:
             return True
+
     except Exception:
         pass
     return False
@@ -186,16 +218,22 @@ def compute_indicators(df_1d, df_4h, df_15m):
     return df_1d, df_4h, df_15m
 
 
-# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH ---
+# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH Z SEMAFOREM ---
 async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retries=3, delay=1.0):
-    """Pobiera świece asynchronicznie z ponawianiem próby przy błędzie."""
-    for attempt in range(retries):
-        try:
-            return await exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-        except Exception as e:
-            if attempt == retries - 1:
-                raise e
-            await asyncio.sleep(delay)
+    """Pobiera świece asynchronicznie, ograniczając zapytania przez SEMAFOR."""
+    async with KRAKEN_SEMAPHORE:
+        for attempt in range(retries):
+            try:
+                return await exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise e
+                await asyncio.sleep(delay)
+
+async def fetch_ticker_safe(exchange, symbol):
+    """Pobiera ticker z użyciem semafora."""
+    async with KRAKEN_SEMAPHORE:
+        return await exchange.fetch_ticker(symbol)
 
 async def fetch_symbol_data(exchange, symbol):
     """Pobiera równolegle ramy 1D, 4H, 15M dla danego symbolu."""
@@ -215,7 +253,7 @@ async def fetch_symbol_data(exchange, symbol):
 # --- 6. GŁÓWNA PĘTLA APLIKACJI ---
 async def main():
     start_time = time.time()
-    logging.info("Uruchamianie zoptymalizowanego skanera Krypto (Kraken CCXT Async)...")
+    logging.info("Uruchamianie zoptymalizowanego skanera Krypto (Kraken CCXT Async + Safe I/O)...")
     
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
@@ -228,9 +266,9 @@ async def main():
     usd_gbp_rate = 0.78
 
     try:
-        # 1. RÓWNOLEGŁE POBRANIE DANYCH BAZOWYCH
+        # 1. RÓWNOLEGŁE POBRANIE DANYCH BAZOWYCH Z KONTROLĄ RATE LIMITU
         btc_tasks = [
-            exchange.fetch_ticker("GBP/USD"),
+            fetch_ticker_safe(exchange, "GBP/USD"),
             fetch_ohlcv_retry_async(exchange, "BTC/GBP", "1d", 250),
             fetch_ohlcv_retry_async(exchange, "BTC/GBP", "4h", 300),
             fetch_ohlcv_retry_async(exchange, "BTC/USD", "1d", 250),
@@ -275,7 +313,7 @@ async def main():
             adx_closed = df_4h['ADX'].iloc[-2]
             is_trending_4h = adx_closed > 25
 
-            # Detekcja byczej dywergencji
+            # Detekcja byczej dywergencji (Pivot Lows)
             has_bullish_div = check_bullish_divergence(df_4h)
 
             # Siła względna (RS vs BTC)
@@ -466,13 +504,13 @@ async def main():
 
             cache[symbol] = {"ts": ts_closed, "signal": signal_to_save}
 
-        # 3. ZBIORCZA WYSYŁKA ALERTÓW ORAZ BATCH DO GOOGLE SHEETS
+        # 3. ZBIORCZA NIEBLOKUJĄCA WYSYŁKA ALERTÓW ORAZ BATCH DO GOOGLE SHEETS
         if pending_alerts:
             rows_to_append = []
             if len(pending_alerts) <= 3:
                 for task_title, msg, _, _, meta in pending_alerts:
-                    send_telegram_alert(msg)
-                    add_to_tasks(tasks_service, task_title, msg.replace('**', ''))
+                    await send_telegram_alert_async(msg)
+                    await add_to_tasks_async(tasks_service, task_title, msg.replace('**', ''))
                     rows_to_append.append([
                         now_str, meta['symbol'], meta['signal'],
                         meta['price'], f"RSI: {meta['rsi']}",
@@ -490,13 +528,13 @@ async def main():
                     ])
                 lawina_msg += "\n*Sprawdź szczegóły w aplikacji lub poczekaj na digest.*"
                 
-                send_telegram_alert(lawina_msg)
-                add_to_tasks(tasks_service, lawina_title, lawina_msg.replace('**', ''))
+                await send_telegram_alert_async(lawina_msg)
+                await add_to_tasks_async(tasks_service, lawina_title, lawina_msg.replace('**', ''))
 
-            # Wpisanie wierszy zbiorczo
+            # Nieblokujący wpis wierszy do Google Sheets
             if sheet and rows_to_append:
                 try:
-                    sheet.append_rows(rows_to_append)
+                    await asyncio.to_thread(sheet.append_rows, rows_to_append)
                     logging.info(f"Zapisano {len(rows_to_append)} transakcji zbiorczo do Dziennika w Google Sheets.")
                 except Exception as e:
                     logging.error(f"Nie udało się zapisać wierszy w Google Sheets: {e}")
@@ -505,8 +543,8 @@ async def main():
         if uk_now.hour >= 21 and cache.get("DIGEST_DATE") != today_str:
             if digest_lines:
                 digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines)
-                send_telegram_alert(digest_msg)
-                add_to_tasks(tasks_service, f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
+                await send_telegram_alert_async(digest_msg)
+                await add_to_tasks_async(tasks_service, f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
                 cache["DIGEST_DATE"] = today_str
 
         save_cache(cache)
@@ -525,5 +563,5 @@ if __name__ == "__main__":
     except Exception as e:
         logging.critical(f"KRYTYCZNY BŁĄD SKANERA KRYPTO: {e}", exc_info=True)
         err_msg = f"🚨 **🔴 KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`"
-        send_telegram_alert(err_msg)
+        asyncio.run(send_telegram_alert_async(err_msg))
         raise e
