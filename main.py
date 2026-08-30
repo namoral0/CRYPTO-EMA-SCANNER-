@@ -92,7 +92,7 @@ async def send_telegram_alert_async(msg, custom_chat_id=None):
     if not TELEGRAM_TOKEN or not chat_id:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
+    payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
         await asyncio.to_thread(requests.post, url, json=payload, timeout=10)
     except Exception as e:
@@ -132,7 +132,7 @@ async def process_telegram_commands_async(cache, digest_rows):
     if not TELEGRAM_TOKEN:
         return
     
-    # 1. Usuwanie ewentualnego blokującego webhooka
+    # Czyszczenie ewentualnego blokującego webhooka
     try:
         del_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=false"
         await asyncio.to_thread(requests.get, del_url, timeout=5)
@@ -151,13 +151,12 @@ async def process_telegram_commands_async(cache, digest_rows):
                 text = msg_obj.get("text", "").strip().lower()
                 chat_id = msg_obj.get("chat", {}).get("id")
 
-                # Elastyczne wykrywanie komend (działa też dla /stan@BotName)
                 if text.startswith("/status") or text.startswith("/stan") or text.startswith("/start"):
-                    t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
-                    status_msg = "📊 **AKTUALNY STAN RYNKU (NA ŻĄDANIE)**\n\n"
+                    status_msg = "📋 **AKTUALNY STAN RYNKU (KRYPTO)**\n\n"
                     for r in digest_rows:
-                        status_msg += f"🪙 **{r['symbol']}**: `{r['price']}` | RSI: `{r['rsi']}` | {r['status']}\n"
-                    status_msg += f"\n🔗 {t212_link}"
+                        # Formatowanie dokładnie jak na zrzucie akcji (symbol podlinkowany na niebiesko)
+                        sym_link = f"[{r['symbol']}](https://live.trading212.com/)"
+                        status_msg += f"🪙 {sym_link} — {r['price']}\n  └ RSI 4h: {r['rsi']} | Trend: {r['trend']} | Stan: {r['status']}{r.get('div_tag', '')}\n\n"
                     
                     target_chat = chat_id or TELEGRAM_CHAT_ID
                     if target_chat:
@@ -504,11 +503,12 @@ async def main():
             trend_txt = "↗️" if is_uptrend_1d else "↘️"
             div_tag = " | 📈 BYCZA DYWERGENCJA" if has_bullish_div else ""
             
-            digest_lines.append(f"🪙 **{symbol}** — {display_price}\n  └ RSI: {rsi_4h_closed} | ADX: {round(adx_closed,1)} | Trend: {trend_txt} | Stan: {status_txt}{div_tag}\n")
+            sym_link = f"[{symbol}](https://live.trading212.com/)"
+            digest_lines.append(f"🪙 {sym_link} — {display_price}\n  └ RSI 4h: {rsi_4h_closed} | Trend: {trend_txt} | Stan: {status_txt}{div_tag}\n\n")
             digest_summary_rows.append({
                 'symbol': symbol, 'price': display_price,
                 'rsi': rsi_4h_closed, 'adx': round(adx_closed,1),
-                'trend': trend_txt, 'status': status_txt
+                'trend': trend_txt, 'status': status_txt, 'div_tag': div_tag
             })
 
             cached_data = cache.get(symbol, {})
