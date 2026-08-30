@@ -91,6 +91,16 @@ def get_google_sheet():
         return client.open_by_key(SPREADSHEET_ID).sheet1
     except Exception as e:
         logging.error(f"Błąd autoryzacji Google Sheets dla Krypto: {e}")
+        # Wysyłka e-maila bota na Telegram
+        try:
+            creds_dict = json.loads(GOOGLE_TASKS_CREDENTIALS)
+            bot_email = creds_dict.get("client_email", "Brak e-maila")
+            send_telegram_alert(
+                f"🔑 **ADRES E-MAIL BOTA DO ARKUSZA:**\n\n`{bot_email}`\n\n"
+                f"Skopiuj powyższy adres i udostępnij mu swój Arkusz Google jako **Edytor**."
+            )
+        except Exception as ex:
+            logging.error(f"Nie udało się odczytać pola client_email: {ex}")
         return None
 
 
