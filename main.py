@@ -30,7 +30,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# Poprawka: 'or "@default"' zapobiega przejściu pustego ciągu "" z GitHub Secrets
+# Obsługa fallbacku dla pustego ciągu znaków w GitHub Secrets
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
@@ -43,7 +43,7 @@ SYMBOLS = [
 ]
 CACHE_FILE = "cache_krypto.json"
 
-# Semafor ograniczający równoległe zapytania do API Krakena (ochrona przed Rate Limit 429)
+# Ochrona przed przekroczeniem limitów API (Rate Limit 429)
 KRAKEN_SEMAPHORE = asyncio.Semaphore(3)
 
 
@@ -86,7 +86,7 @@ def save_cache(cache_data):
         logging.error(f"Nie udało się zapisać cache: {e}")
 
 async def send_telegram_alert_async(msg):
-    """Nieblokujące wysyłanie wiadomości na Telegram (uruchamiane w wątku I/O)."""
+    """Nieblokujące wysyłanie wiadomości na Telegram (w osobnej pętli I/O)."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -115,8 +115,7 @@ async def add_to_tasks_async(tasks_service, title, notes):
 # --- 4. FUNKCJE ANALITYCZNE I MATEMATYCZNE ---
 def check_bullish_divergence(df_4h, lookback=35):
     """
-    Zaawansowana detekcja byczej dywergencji RSI na podstawie punktów zwrotnych (Pivot Lows).
-    Weryfikuje, czy powstaje niższy dołek cenowy z wyższym odczytem RSI (<45).
+    Wykrywa byczą dywergencję RSI na podstawie punktów zwrotnych (Pivot Lows).
     """
     try:
         if len(df_4h) < lookback + 5:
@@ -155,7 +154,7 @@ def check_bullish_divergence(df_4h, lookback=35):
     return False
 
 def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
-    """Oblicza optymalną wielkość pozycji w GBP przy stałym ryzyku £50."""
+    """Oblicza wielkość pozycji w GBP przy ryzyku £50."""
     try:
         if price_gbp <= sl_gbp or sl_gbp <= 0:
             return 0.0
@@ -168,7 +167,7 @@ def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
         return 0.0
 
 def compute_indicators(df_1d, df_4h, df_15m):
-    """Oblicza komplet wskaźników technicznych w pamięci podręcznej (Pandas)."""
+    """Wyliczanie kompletnego zestawu wskaźników technicznych w pamięci RAM."""
     # 1D EMA 200
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
 
@@ -219,7 +218,7 @@ def compute_indicators(df_1d, df_4h, df_15m):
 
 # --- 5. ASYNCHRONICZNE POBIERANIE DANYCH Z SEMAFOREM ---
 async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retries=3, delay=1.0):
-    """Pobiera świece asynchronicznie, ograniczając zapytania przez SEMAFOR."""
+    """Pobiera świece asynchronicznie, ograniczając jednoczesne połączenia."""
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
             try:
@@ -230,12 +229,12 @@ async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retrie
                 await asyncio.sleep(delay)
 
 async def fetch_ticker_safe(exchange, symbol):
-    """Pobiera ticker z użyciem semafora."""
+    """Pobiera kurs rynkowy z użyciem semafora."""
     async with KRAKEN_SEMAPHORE:
         return await exchange.fetch_ticker(symbol)
 
 async def fetch_symbol_data(exchange, symbol):
-    """Pobiera równolegle ramy 1D, 4H, 15M dla danego symbolu."""
+    """Pobiera dane 1D, 4H i 15M dla wybranego aktywa."""
     try:
         res_1d, res_4h, res_15m = await asyncio.gather(
             fetch_ohlcv_retry_async(exchange, symbol, "1d", 250),
@@ -433,9 +432,8 @@ async def main():
             signal_to_save = current_signal_type if current_signal_type != "NONE" else (last_signal if last_ts == ts_closed else "NONE")
 
             if should_alert:
-                base_asset, quote_asset = symbol.split('/')
-                tv_crypto_link = f"[📈 Wykres TradingView](https://www.tradingview.com/chart/?symbol=KRAKEN%3A{base_asset}{quote_asset})"
-                kraken_trade_link = f"[⚡️ Handluj na Kraken](https://pro.kraken.com/app/trade/{base_asset}-{quote_asset})"
+                # Dedykowany odnośnik do aplikacji Trading 212
+                t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
                 div_note = "\n📈 **Wykryto BYCZĄ DYWERGENCJĘ RSI (4H)!**\n" if has_bullish_div else ""
 
                 if current_signal_type == "BUY_MEGA":
@@ -450,7 +448,7 @@ async def main():
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}\n"
                         f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £50):** `{pos_size_str}`\n"
                         f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
-                        f"🔗 {tv_crypto_link} | {kraken_trade_link}"
+                        f"🔗 {t212_link}"
                     )
                 elif current_signal_type == "BUY_SWING":
                     rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)**"
@@ -464,7 +462,7 @@ async def main():
                         f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}\n"
                         f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £50):** `{pos_size_str}`\n"
                         f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany Take Profit:** `{tp_str}`\n\n"
-                        f"🔗 {tv_crypto_link} | {kraken_trade_link}"
+                        f"🔗 {t212_link}"
                     )
                 elif current_signal_type == "SELL_TAKE_PROFIT":
                     rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZUJ ZYSKI (TAKE PROFIT)**"
@@ -475,7 +473,7 @@ async def main():
                         f"💰 **Cena:** `{display_price}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {sell_rsi_threshold}`\n"
                         f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n\n"
-                        f"🔗 {tv_crypto_link} | {kraken_trade_link}"
+                        f"🔗 {t212_link}"
                     )
                 else: 
                     rodzaj = "🔴 KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
@@ -486,7 +484,7 @@ async def main():
                         f"🔴 **CENA: {display_price.upper()}**\n"
                         f"🔴 **RSI 4H: {rsi_4h_closed} (PRÓG: {sell_rsi_threshold})**\n"
                         f"🔴 **TREND 1D: SPADKOWY**\n\n"
-                        f"🔗 {tv_crypto_link} | {kraken_trade_link}"
+                        f"🔗 {t212_link}"
                     )
 
                 pending_alerts.append((
