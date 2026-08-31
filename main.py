@@ -346,6 +346,7 @@ async def main() -> None:
                 low_closed = float(df_4h['l'].iloc[-2])
 
                 bb_lower_closed = float(df_4h['BB_lower'].iloc[-2])
+                bb_upper_closed = float(df_4h['BB_upper'].iloc[-2]) if not pd.isna(df_4h['BB_upper'].iloc[-2]) else close_closed * 1.02
                 avg_atr = float(df_4h['ATR_MA'].iloc[-2]) if not pd.isna(df_4h['ATR_MA'].iloc[-2]) else 0.0
                 atr_val = float(df_4h['ATR'].iloc[-2]) if not pd.isna(df_4h['ATR'].iloc[-2]) else 0.0
 
@@ -357,6 +358,9 @@ async def main() -> None:
                 display_price = f"{curr_symbol_native}{close_closed:.4f}" if close_closed < 1 else f"{curr_symbol_native}{close_closed:.2f}"
                 sl_calc = max(0.0, min(close_closed - sl_multiplier * atr_val, low_closed))
                 sl_str = f"{curr_symbol_native}{sl_calc:.4f}" if sl_calc < 1 else f"{curr_symbol_native}{sl_calc:.2f}"
+                
+                tp_calc = bb_upper_closed
+                tp_str = f"{curr_symbol_native}{tp_calc:.4f} (BB Upper)" if tp_calc < 1 else f"{curr_symbol_native}{tp_calc:.2f} (BB Upper)"
 
                 position_size = calculate_position_size(close_closed, sl_calc, FIXED_RISK_NATIVE)
                 pos_size_str = f"{curr_symbol_native}{position_size:.2f}" if position_size > 0 else "N/A"
@@ -441,7 +445,6 @@ async def main() -> None:
                         )
                     else:
                         task_title = f"⚡️ SZYBKIE ODBICIE: {symbol}"
-                        # Dynamiczny opis RSI w zależności od tego, czy faktycznie wystąpiła dywergencja czy wyprzedanie
                         if has_bullish_div:
                             rsi_desc = f"`{rsi_4h_closed}` (Potwierdzone Byczą Dywergencją 📈)"
                         elif rsi_4h_closed <= 25.0:
@@ -466,7 +469,8 @@ async def main() -> None:
                             'status': status_txt,
                             'price': display_price, 
                             'rsi_4h': rsi_4h_closed,
-                            'rsi_1d': rsi_1d_closed
+                            'sl_str': sl_str,
+                            'tp_str': tp_str
                         }
                     ))
 
@@ -496,12 +500,13 @@ async def main() -> None:
                     alert_coroutines.append(add_to_tasks_async(tasks_service, task_title, msg.replace('**', '')))
                     
                     rows_to_append_sheets.append([
-                        now_str,        # Kolumna A: Data i czas
-                        meta['symbol'], # Kolumna B: Symbol
-                        meta['price'],  # Kolumna C: Cena
-                        meta['rsi_4h'], # Kolumna D: RSI 4H
-                        meta['rsi_1d'], # Kolumna E: RSI 1D
-                        meta['status']  # Kolumna F: Stan / Sygnał
+                        now_str,            # Kolumna A: Data i czas
+                        meta['symbol'],     # Kolumna B: Moneta
+                        meta['status'],     # Kolumna C: Sygnał
+                        meta['price'],      # Kolumna D: Cena
+                        f"RSI: {meta['rsi_4h']}", # Kolumna E: RSI
+                        f"SL: {meta['sl_str']}",  # Kolumna F: Stop Loss
+                        f"TP: {meta['tp_str']}"   # Kolumna G: Take Profit
                     ])
                 await asyncio.gather(*alert_coroutines)
 
