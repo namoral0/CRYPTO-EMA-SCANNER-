@@ -441,10 +441,18 @@ async def main() -> None:
                         )
                     else:
                         task_title = f"⚡️ SZYBKIE ODBICIE: {symbol}"
+                        # Dynamiczny opis RSI w zależności od tego, czy faktycznie wystąpiła dywergencja czy wyprzedanie
+                        if has_bullish_div:
+                            rsi_desc = f"`{rsi_4h_closed}` (Potwierdzone Byczą Dywergencją 📈)"
+                        elif rsi_4h_closed <= 25.0:
+                            rsi_desc = f"`{rsi_4h_closed}` (Mocne wyprzedanie 📉)"
+                        else:
+                            rsi_desc = f"`{rsi_4h_closed}` (Strefa zwrotna / Wstęgi Bollingera)"
+
                         msg = (
                             f"⚡️ **SZYBKA OKAZJA NA ODBICIE (REBOUND)**{div_tag}\n\n"
                             f"🪙 **Moneta:** `{symbol}` | **Cena:** `{display_price}`\n"
-                            f"📊 **RSI 4H:** `{rsi_4h_closed}` (Mocne wyprzedanie)\n"
+                            f"📊 **RSI 4H:** {rsi_desc}\n"
                             f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy/Korekta 🟡'}`\n"
                             f"⚖️ **Pozycja (Ryzyko {curr_symbol_native}{int(FIXED_RISK_NATIVE)}):** `{pos_size_str}`\n"
                             f"🛡 **Stop Loss:** `{sl_str}`\n\n"
@@ -506,7 +514,7 @@ async def main() -> None:
 
             if uk_now.hour >= 21 and cache.get("DIGEST_DATE") != today_str:
                 if digest_lines:
-                    digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines) + "\n📎 🔊 [Handluj na Trading 212](https://live.trading212.com/)"
+                    digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines) + "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
                     await asyncio.gather(
                         send_telegram_alert_async(http_client, digest_msg),
                         add_to_tasks_async(tasks_service, f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
