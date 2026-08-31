@@ -43,17 +43,14 @@ SYMBOLS = [
 ]
 CACHE_FILE = "cache_krypto.json"
 
-# Ochrona przed limitami zapytań Krakena oraz Google API
 KRAKEN_SEMAPHORE = asyncio.Semaphore(3)
 GOOGLE_SEMAPHORE = asyncio.Semaphore(2)
 
-# Czas blokady powtórnego powiadomienia (Cooldown: 24 godziny)
 SIGNAL_COOLDOWN_SECONDS = 86400
 
 
 # --- 3. INICJALIZACJA USŁUG I I/O ---
 def init_google_services():
-    """Jednorazowa autoryzacja Google Tasks i Google Sheets."""
     if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS:
         return None, None
     try:
@@ -93,7 +90,6 @@ def save_cache(cache_data):
         logging.error(f"Nie udało się zapisać cache: {e}")
 
 async def send_telegram_alert_async(http_client: httpx.AsyncClient, msg: str, custom_chat_id=None):
-    """Natywnie asynchroniczne wysyłanie wiadomości na Telegram z użyciem Connection Pooling."""
     chat_id = custom_chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_TOKEN or not chat_id:
         return
@@ -105,7 +101,6 @@ async def send_telegram_alert_async(http_client: httpx.AsyncClient, msg: str, cu
         logging.error(f"Nie udało się wysłać wiadomości na Telegram: {e}")
 
 async def add_to_tasks_async(tasks_service, title, notes):
-    """Nieblokujące dodawanie zadania do Google Tasks z zabezpieczeniem semaforem."""
     if not tasks_service:
         return
     async with GOOGLE_SEMAPHORE:
@@ -121,14 +116,13 @@ async def add_to_tasks_async(tasks_service, title, notes):
             logging.error(f"Błąd Google Tasks: {e}")
 
 def write_github_step_summary(digest_rows, health_msg=""):
-    """Generuje tabelę Markdown bezpośrednio w podsumowaniu GitHub Actions wraz z diagnostyką."""
     summary_file = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_file:
         try:
             with open(summary_file, "a", encoding="utf-8") as f:
                 if health_msg:
                     f.write(f"> {health_msg}\n\n")
-                f.write("### 📊 Podsumowanie Skanera Krypto\n\n")
+                f.write("### 📊 Podsumowanie Skanera Krypto (Filtrowane)\n\n")
                 f.write("| Moneta | Cena | RSI 4H | ADX 4H | Trend 1D | Stan |\n")
                 f.write("| --- | --- | --- | --- | --- | --- |\n")
                 for r in digest_rows:
@@ -137,10 +131,8 @@ def write_github_step_summary(digest_rows, health_msg=""):
             logging.error(f"Błąd zapisu GITHUB_STEP_SUMMARY: {e}")
 
 async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache: dict, digest_rows: list):
-    """Obsługa interaktywnych komend (/status, /stan) na Telegramie."""
     if not TELEGRAM_TOKEN:
         return
-    
     try:
         del_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=false"
         await http_client.get(del_url, timeout=5.0)
@@ -165,27 +157,21 @@ async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache:
                         sym_link = f"[{r['symbol']}](https://live.trading212.com/)"
                         div = r.get('div_tag', '')
                         status_msg += f"🪙 {sym_link}: {r['price']} | RSI: {r['rsi']} | {r['status']}{div}\n"
-                    
                     status_msg += "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
-                    
                     target_chat = chat_id or TELEGRAM_CHAT_ID
                     if target_chat:
                         await send_telegram_alert_async(http_client, status_msg, custom_chat_id=target_chat)
-                        logging.info(f"Odpowiedziano na komendę {text} dla chat_id: {target_chat}")
     except Exception as e:
         logging.error(f"Błąd przetwarzania komend Telegram: {e}")
 
 
 # --- 4. FUNKCJE ANALITYCZNE I MATEMATYCZNE ---
 def check_bullish_divergence(df_4h, lookback=35):
-    """Wykrywa byczą dywergencję RSI na podstawie punktów zwrotnych (Pivot Lows)."""
     try:
         if len(df_4h) < lookback + 5:
             return False
-
         sub_df = df_4h.iloc[-(lookback + 1):-1].copy().reset_index(drop=True)
         n = len(sub_df)
-        
         pivot_lows = []
         for i in range(2, n - 2):
             is_pivot = (
@@ -199,7 +185,6 @@ def check_bullish_divergence(df_4h, lookback=35):
 
         if len(pivot_lows) < 2:
             return False
-
         prev_pivot = pivot_lows[-2]
         curr_pivot = pivot_lows[-1]
 
@@ -210,26 +195,22 @@ def check_bullish_divergence(df_4h, lookback=35):
 
         if price_lower and rsi_higher and rsi_oversold and valid_distance:
             return True
-
     except Exception:
         pass
     return False
 
 def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
-    """Oblicza wielkość pozycji w GBP dla ryzyka £10."""
     try:
         if price_gbp <= sl_gbp or sl_gbp <= 0:
             return 0.0
         risk_pct = (price_gbp - sl_gbp) / price_gbp
         if risk_pct <= 0:
             return 0.0
-        position_size_gbp = fixed_risk / risk_pct
-        return round(position_size_gbp, 2)
+        return round(fixed_risk / risk_pct, 2)
     except Exception:
         return 0.0
 
 def compute_indicators(df_1d, df_4h, df_15m):
-    """Wyliczanie wskaźników technicznych."""
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
 
     df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
@@ -307,7 +288,7 @@ async def fetch_symbol_data(exchange, symbol):
 # --- 6. GŁÓWNA PĘTLA APLIKACJI ---
 async def main():
     start_time = time.time()
-    logging.info("Uruchamianie Skanera Krypto (Tryb w 100% Instytucjonalny)...")
+    logging.info("Uruchamianie Skanera Krypto (Tryb bezpieczny - Anti-Crash)...")
     
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
@@ -384,7 +365,6 @@ async def main():
             position_async_tasks = []
 
             active_positions = cache.get("active_positions", {})
-
             success_count = 0
             total_checked = len(SYMBOLS)
 
@@ -406,7 +386,9 @@ async def main():
                 adx_closed = df_4h['ADX'].iloc[-2]
                 is_trending_4h = adx_closed > 25
 
-                has_bullish_div = check_bullish_divergence(df_4h)
+                # FILTR: Zezwalaj na byczą dywergencję TYLKO jeśli trend dzienny 1D jest wzrostowy!
+                has_raw_div = check_bullish_divergence(df_4h)
+                has_bullish_div = has_raw_div and is_uptrend_1d  # Odrzuca dywergencje w bessie!
 
                 is_strong_vs_btc_4h = True
                 if symbol != btc_symbol and df_4h_btc is not None:
@@ -415,7 +397,6 @@ async def main():
                         merged_rs.set_index('ts', inplace=True)
                         rs_series = merged_rs['close'] / (merged_rs['close_btc'] + 1e-10)
                         rs_ema = rs_series.ewm(span=20, adjust=False).mean()
-                        
                         if ts_closed in merged_rs.index:
                             is_strong_vs_btc_4h = bool(rs_series.loc[ts_closed] >= rs_ema.loc[ts_closed])
                         else:
@@ -449,13 +430,16 @@ async def main():
 
                 tp_target_raw = close_closed + (2.5 * atr_val) if is_uptrend_1d else bb_upper_closed
 
+                # ZWIĘKSZONY BUFOR STOP LOSSA: 2.0 * ATR zamiast 1.5 dla lepszej ochrony przed szumem
+                sl_multiplier = 2.0
+
                 if symbol.endswith("/USD"):
                     price_gbp = close_closed * usd_gbp_rate
                     high_gbp = high_closed * usd_gbp_rate
                     low_gbp = low_closed * usd_gbp_rate
                     atr_gbp = atr_val * usd_gbp_rate
                     display_price = f"£{price_gbp:.4f}" if price_gbp < 1 else f"£{price_gbp:.2f}"
-                    sl_calc_gbp = max(0, min((close_closed - 1.5 * atr_val) * usd_gbp_rate, low_gbp))
+                    sl_calc_gbp = max(0, min((close_closed - sl_multiplier * atr_val) * usd_gbp_rate, low_gbp))
                     tp_calc_gbp = tp_target_raw * usd_gbp_rate
                 else:
                     price_gbp = close_closed
@@ -463,7 +447,7 @@ async def main():
                     low_gbp = low_closed
                     atr_gbp = atr_val
                     display_price = f"£{close_closed:.4f}" if close_closed < 1 else f"£{close_closed:.2f}"
-                    sl_calc_gbp = max(0, min(close_closed - 1.5 * atr_val, low_gbp))
+                    sl_calc_gbp = max(0, min(close_closed - sl_multiplier * atr_val, low_gbp))
                     tp_calc_gbp = tp_target_raw
 
                 sl_str = f"£{sl_calc_gbp:.4f}" if sl_calc_gbp < 1 else f"£{sl_calc_gbp:.2f}"
@@ -521,7 +505,6 @@ async def main():
                             position_async_tasks.append(send_telegram_alert_async(http_client, tp1_msg))
                             position_async_tasks.append(add_to_tasks_async(tasks_service, f"TP1: Zrealizuj 50% {symbol}", tp1_msg.replace('**', '')))
                             rows_to_append_sheets.append([now_str, symbol, "TP1_HIT_50% 🟢", display_price, f"RSI: {rsi_4h_closed}", "-", "-"])
-                            
                             pos["tp1_hit"] = True
                             pos["sl_price"] = entry_price
 
@@ -536,7 +519,6 @@ async def main():
                         new_trailing_sl = pos["highest_price"] - (2.0 * pos_atr_gbp)
                         if new_trailing_sl > pos["sl_price"]:
                             pos["sl_price"] = new_trailing_sl
-                            logging.info(f"Podciągnięto Trailing SL dla {symbol} do poziomu £{new_trailing_sl:.4f}")
 
                         if low_gbp <= pos["sl_price"]:
                             closed_sl_str = f"£{pos['sl_price']:.4f}" if pos['sl_price'] < 1 else f"£{pos['sl_price']:.2f}"
@@ -568,10 +550,13 @@ async def main():
                 is_oversold_4h = rsi_4h_closed <= buy_rsi_threshold
                 is_overbought_4h = rsi_4h_closed >= sell_rsi_threshold
                 
+                # Warunek potwierdzenia wejścia na niższym interwale (15m RSI odbija powyżej progu)
+                is_15m_confirmed = rsi_15m_closed > df_15m['RSI'].iloc[-3]
+
                 if is_core:
-                    is_base_buy = ((is_oversold_4h and rsi_15m_closed <= confirm_15m_buy) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed) or has_bullish_div) and not is_anomaly_candle
+                    is_base_buy = ((is_oversold_4h and rsi_15m_closed <= confirm_15m_buy and is_15m_confirmed) or (crossover_up and is_uptrend_1d) or (is_oversold_4h and close_closed <= bb_lower_closed) or has_bullish_div) and not is_anomaly_candle
                 else:
-                    is_base_buy = ((is_oversold_4h and (rsi_15m_closed <= confirm_15m_buy or close_closed <= bb_lower_closed)) or has_bullish_div) and not is_anomaly_candle
+                    is_base_buy = ((is_oversold_4h and (rsi_15m_closed <= confirm_15m_buy or close_closed <= bb_lower_closed) and is_15m_confirmed) or has_bullish_div) and not is_anomaly_candle
 
                 if is_trending_4h and not is_uptrend_1d and not has_bullish_div:
                     is_base_buy = False
@@ -625,7 +610,7 @@ async def main():
 
                 if should_alert:
                     t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
-                    div_note = "\n📈 **Wykryto BYCZĄ DYWERGENCJĘ RSI (4H)!**\n" if has_bullish_div else ""
+                    div_note = "\n📈 **Wykryto BYCZĄ DYWERGENCJĘ RSI (4H) w Trendzie Wzrostowym!**\n" if has_bullish_div else ""
                     risk_label = int(FIXED_RISK_GBP) if FIXED_RISK_GBP.is_integer() else FIXED_RISK_GBP
 
                     if current_signal_type in ["BUY_MEGA", "BUY_SWING"]:
@@ -643,65 +628,50 @@ async def main():
                         }
 
                     if current_signal_type == "BUY_MEGA":
-                        rodzaj = "🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)**"
                         task_title = f"MEGA OKAZJA: KUP {symbol}"
                         msg = (
-                            f"{rodzaj}\n{div_note}\n"
+                            f"🟢 **MEGA OKAZJA CORE / HOSSA (KUPNO DOŁKA)**\n{div_note}\n"
                             f"🪙 **Moneta:** `{symbol}`\n"
                             f"💰 **Cena:** `{display_price}`\n"
                             f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
                             f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n"
-                            f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta w Bessie (Okazja Core) 🟡'}\n"
-                            f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £{risk_label}):** `{pos_size_str}`\n"
-                            f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany TP1 (50%):** `£{tp1_calc_gbp:.4f}`\n\n"
-                            f"🔗 {t212_link}"
+                            f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Korekta 🟡'}\n"
+                            f"⚖️ **Wielkość pozycji (Ryzyko £{risk_label}):** `{pos_size_str}`\n"
+                            f"🛡 **Stop Loss:** `{sl_str}`\n🎯 **TP1 (50%):** `£{tp1_calc_gbp:.4f}`\n\n🔗 {t212_link}"
                         )
                     elif current_signal_type == "BUY_SWING":
-                        rodzaj = "🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)**"
                         task_title = f"SWING: SPRAWDŹ {symbol}"
                         msg = (
-                            f"{rodzaj}\n{div_note}\n"
+                            f"🟡 **OKAZJA SWING / SATELITA (LOKALNY DOŁEK)**\n{div_note}\n"
                             f"🪙 **Moneta:** `{symbol}`\n"
                             f"💰 **Cena:** `{display_price}`\n"
                             f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {buy_rsi_threshold}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
-                            f"💪 **Siła Wzgl. (BTC):** {'Outperformer 🟢' if is_strong_vs_btc_4h else 'Neutralna/Słabsza 🟡'}\n"
+                            f"💪 **Siła Wzgl. (BTC):** {'Outperformer 🟢' if is_strong_vs_btc_4h else 'Słabsza 🟡'}\n"
                             f"📈 **Trend 1D:** {'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy 🔴'}\n"
-                            f"⚖️ **Rekomendowana wielkość pozycji (Ryzyko £{risk_label}):** `{pos_size_str}`\n"
-                            f"🛡 **Sugerowany Stop Loss:** `{sl_str}`\n🎯 **Sugerowany TP1 (50%):** `£{tp1_calc_gbp:.4f}`\n\n"
-                            f"🔗 {t212_link}"
+                            f"⚖️ **Wielkość pozycji (Ryzyko £{risk_label}):** `{pos_size_str}`\n"
+                            f"🛡 **Stop Loss:** `{sl_str}`\n🎯 **TP1 (50%):** `£{tp1_calc_gbp:.4f}`\n\n🔗 {t212_link}"
                         )
                     elif current_signal_type == "SELL_TAKE_PROFIT":
-                        rodzaj = "🟠 **LOKALNE WYKUPIENIE: REALIZUJ ZYSKI (TAKE PROFIT)**"
-                        task_title = f"TAKE PROFIT: {symbol} (RSI {rsi_4h_closed})"
+                        task_title = f"TAKE PROFIT: {symbol}"
                         msg = (
-                            f"{rodzaj}\n\n"
-                            f"🪙 **Moneta:** `{symbol}`\n"
-                            f"💰 **Cena:** `{display_price}`\n"
-                            f"📊 **RSI 4H:** `{rsi_4h_closed} / Próg: {sell_rsi_threshold}`\n"
-                            f"💪 **Typ monety:** {'FILAR CORE 🚀' if is_core else 'Satelita 🛰'}\n\n"
-                            f"🔗 {t212_link}"
+                            f"🟠 **LOKALNE WYKUPIENIE: REALIZUJ ZYSKI**\n\n"
+                            f"🪙 **Moneta:** `{symbol}` | **Cena:** `{display_price}`\n"
+                            f"📊 **RSI 4H:** `{rsi_4h_closed}`\n\n🔗 {t212_link}"
                         )
                     else: 
-                        rodzaj = "🔴 KRYTYCZNA EWAKUACJA: SPRZEDAŻ SATELITY W TRENDZIE SPADKOWYM!"
                         task_title = f"🔴 PILNE: SPRZEDAJ {symbol.upper()}"
                         msg = (
-                            f"🚨 **{rodzaj}**\n\n"
-                            f"🔴 **MONETA: {symbol.upper()}**\n"
-                            f"🔴 **CENA: {display_price.upper()}**\n"
-                            f"🔴 **RSI 4H: {rsi_4h_closed} (PRÓG: {sell_rsi_threshold})**\n"
-                            f"🔴 **TREND 1D: SPADKOWY**\n\n"
-                            f"🔗 {t212_link}"
+                            f"🚨 **KRYTYCZNA EWAKUACJA: TREND SPADKOWY!**\n\n"
+                            f"🔴 **MONETA: {symbol.upper()}** | **CENA: {display_price.upper()}**\n"
+                            f"🔴 **RSI 4H: {rsi_4h_closed}**\n\n🔗 {t212_link}"
                         )
 
                     pending_alerts.append((
                         task_title, msg, symbol, status_txt,
                         {
-                            'symbol': symbol,
-                            'signal': current_signal_type,
-                            'price': display_price,
-                            'rsi': rsi_4h_closed,
-                            'sl': sl_str,
-                            'tp': tp_str
+                            'symbol': symbol, 'signal': current_signal_type,
+                            'price': display_price, 'rsi': rsi_4h_closed,
+                            'sl': sl_str, 'tp': tp_str
                         }
                     ))
 
@@ -718,7 +688,7 @@ async def main():
                 await asyncio.gather(*position_async_tasks)
 
             elapsed = round(time.time() - start_time, 2)
-            health_summary = f"🩺 **Autodiagnostyka Krypto:** Przeanalizowano `{success_count}/{total_checked}` par w `{elapsed}s`. System operacyjny stabilny."
+            health_summary = f"🩺 **Autodiagnostyka Krypto:** Przeanalizowano `{success_count}/{total_checked}` par w `{elapsed}s`."
             logging.info(health_summary.replace('**', '').replace('`', ''))
 
             write_github_step_summary(digest_summary_rows, health_msg=health_summary)
@@ -726,30 +696,14 @@ async def main():
 
             if pending_alerts:
                 alert_coroutines = []
-                if len(pending_alerts) <= 3:
-                    for task_title, msg, _, _, meta in pending_alerts:
-                        alert_coroutines.append(send_telegram_alert_async(http_client, msg))
-                        alert_coroutines.append(add_to_tasks_async(tasks_service, task_title, msg.replace('**', '')))
-                        rows_to_append_sheets.append([
-                            now_str, meta['symbol'], meta['signal'],
-                            meta['price'], f"RSI: {meta['rsi']}",
-                            f"SL: {meta['sl']}", f"TP: {meta['tp']}"
-                        ])
-                else:
-                    lawina_title = f"🚨 LAWINOWA ZMIANA NA RYNKU: {len(pending_alerts)} ALERTÓW!"
-                    lawina_msg = f"⚠️ **ZMASOWANA ZMIANA STANU RYNKU ({len(pending_alerts)} MONET)**\n\n"
-                    for _, _, sym, stat, meta in pending_alerts:
-                        lawina_msg += f"• **{sym}**: {stat}\n"
-                        rows_to_append_sheets.append([
-                            now_str, meta['symbol'], meta['signal'],
-                            meta['price'], f"RSI: {meta['rsi']}",
-                            f"SL: {meta['sl']}", f"TP: {meta['tp']}"
-                        ])
-                    lawina_msg += "\n*Sprawdź szczegóły w aplikacji lub poczekaj na digest.*"
-                    
-                    alert_coroutines.append(send_telegram_alert_async(http_client, lawina_msg))
-                    alert_coroutines.append(add_to_tasks_async(tasks_service, lawina_title, lawina_msg.replace('**', '')))
-
+                for task_title, msg, _, _, meta in pending_alerts:
+                    alert_coroutines.append(send_telegram_alert_async(http_client, msg))
+                    alert_coroutines.append(add_to_tasks_async(tasks_service, task_title, msg.replace('**', '')))
+                    rows_to_append_sheets.append([
+                        now_str, meta['symbol'], meta['signal'],
+                        meta['price'], f"RSI: {meta['rsi']}",
+                        f"SL: {meta['sl']}", f"TP: {meta['tp']}"
+                    ])
                 await asyncio.gather(*alert_coroutines)
 
             if sheet and rows_to_append_sheets:
