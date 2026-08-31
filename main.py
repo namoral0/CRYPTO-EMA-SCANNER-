@@ -185,7 +185,6 @@ def check_bullish_divergence(df_4h, lookback=35):
         rsi_higher = curr_pivot[2] > prev_pivot[2]
         rsi_oversold = curr_pivot[2] < 48
         valid_distance = 3 <= (curr_pivot[0] - prev_pivot[0]) <= 25
-        # POPRAWKA 1: Weryfikacja świeżości ostatniego dołka (max 5 świec wstecz)
         is_recent_pivot = (n - 1 - curr_pivot[0]) <= 5
 
         if price_lower and rsi_higher and rsi_oversold and valid_distance and is_recent_pivot:
@@ -250,11 +249,18 @@ def compute_indicators(df_1d, df_4h, df_15m):
 
 
 # --- 5. ASYNCHRONICZNE POBIERANIE DANYCH ---
-async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retries=3, delay=1.0):
+async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retries=3, delay=2.0):
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
             try:
                 return await exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            except (ccxt.NetworkError, ccxt.RateLimitExceeded, ccxt.RequestTimeout) as e:
+                if attempt == retries - 1:
+                    logging.error(f"Wypróbowano {retries} prób dla {symbol} ({timeframe}). Ostatni błąd: {e}")
+                    raise e
+                sleep_time = delay * (2 ** attempt)
+                logging.warning(f"Odrzucenie/Timeout z Krakena dla {symbol} [{timeframe}] (Próba {attempt + 1}/{retries}). Odczekanie {sleep_time}s...")
+                await asyncio.sleep(sleep_time)
             except Exception as e:
                 if attempt == retries - 1:
                     raise e
@@ -294,7 +300,10 @@ async def main():
     tasks_service, sheet = init_google_services()
     cache = load_cache()
     
-    exchange = ccxt.kraken({'enableRateLimit': True})
+    exchange = ccxt.kraken({
+        'enableRateLimit': True,
+        'timeout': 15000
+    })
     usd_gbp_rate = 0.78
     elapsed = 0.0
 
@@ -312,7 +321,6 @@ async def main():
             
             btc_results = await asyncio.gather(*btc_tasks, return_exceptions=True)
             
-            # POPRAWKA 2: Bezpieczne przetwarzanie kursu GBP/USD z domyślnym fallbackiem
             ticker_gbp = btc_results[0]
             if ticker_gbp and not isinstance(ticker_gbp, Exception) and isinstance(ticker_gbp, dict) and ticker_gbp.get('last'):
                 usd_gbp_rate = 1.0 / ticker_gbp['last']
@@ -411,7 +419,6 @@ async def main():
                 position_gbp = calculate_position_size(price_gbp, sl_calc_gbp, FIXED_RISK_GBP)
                 pos_size_str = f"£{position_gbp:.2f}" if position_gbp > 0 else "N/A"
 
-                # POPRAWKA 3: Precyzyjna informacja o cenie przy wyzwoleniu Stop Lossa
                 if symbol in active_positions:
                     pos = active_positions[symbol]
                     sl_price = pos["sl_price"]
@@ -427,8 +434,6 @@ async def main():
                         del active_positions[symbol]
 
                 current_signal_type = "NONE"
-                
-                # POPRAWKA 4: Wykorzystanie progu RSI dla aktywów Core w trendzie (<=45)
                 rsi_trend_threshold = 45.0 if is_core else 28.0
 
                 if not is_anomaly_candle:
