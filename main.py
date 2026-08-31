@@ -33,7 +33,7 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-FIXED_RISK_NATIVE = 10.0  # £10 dla GBP / $10 dla USD (bez przeliczania kursowego)
+FIXED_RISK_NATIVE = 20.0  # £20 dla GBP / $20 dla USD (bez przeliczania kursowego)
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
