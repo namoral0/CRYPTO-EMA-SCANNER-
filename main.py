@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 import time
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import ccxt.async_support as ccxt
@@ -33,7 +35,7 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-FIXED_RISK_NATIVE = 20.0  # £20 dla GBP / $20 dla USD (bez przeliczania kursowego)
+FIXED_RISK_NATIVE = 20.0  # £20 dla GBP / $20 dla USD
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
@@ -49,7 +51,7 @@ SIGNAL_COOLDOWN_SECONDS = 86400
 
 
 # --- 3. INICJALIZACJA USŁUG I I/O ---
-def init_google_services():
+def init_google_services() -> Tuple[Any, Optional[Any]]:
     if not HAS_GOOGLE or not GOOGLE_TASKS_CREDENTIALS:
         return None, None
     try:
@@ -69,10 +71,10 @@ def init_google_services():
         logging.error(f"Błąd inicjalizacji Google Services: {e}")
         return None, None
 
-def load_cache():
+def load_cache() -> Dict[str, Any]:
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, "r") as f:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if "active_positions" not in data:
                     data["active_positions"] = {}
@@ -81,25 +83,30 @@ def load_cache():
             logging.error(f"Nie można załadować pliku cache: {e}")
     return {"active_positions": {}}
 
-def save_cache(cache_data):
+def save_cache(cache_data: Dict[str, Any]) -> None:
+    """Zapis atomowy cache zapobiegający uszkodzeniu pliku JSON przy nagłym przerwaniu skryptu."""
     try:
-        with open(CACHE_FILE, "w") as f:
-            json.dump(cache_data, f, indent=2)
+        dir_name = os.path.dirname(os.path.abspath(CACHE_FILE)) or "."
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as tf:
+            json.dump(cache_data, tf, indent=2, ensure_ascii=False)
+            temp_name = tf.name
+        os.replace(temp_name, CACHE_FILE)
     except Exception as e:
-        logging.error(f"Nie udało się zapisać cache: {e}")
+        logging.error(f"Nie udało się zapisać cache (zapis atomowy): {e}")
 
-async def send_telegram_alert_async(http_client: httpx.AsyncClient, msg: str, custom_chat_id=None):
+async def send_telegram_alert_async(http_client: httpx.AsyncClient, msg: str, custom_chat_id: Optional[str] = None) -> None:
     chat_id = custom_chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_TOKEN or not chat_id:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
-        await http_client.post(url, json=payload, timeout=10.0)
+        response = await http_client.post(url, json=payload, timeout=10.0)
+        response.raise_for_status()
     except Exception as e:
         logging.error(f"Nie udało się wysłać wiadomości na Telegram: {e}")
 
-async def add_to_tasks_async(tasks_service, title, notes):
+async def add_to_tasks_async(tasks_service: Any, title: str, notes: str) -> None:
     if not tasks_service:
         return
     async with GOOGLE_SEMAPHORE:
@@ -114,7 +121,7 @@ async def add_to_tasks_async(tasks_service, title, notes):
         except Exception as e:
             logging.error(f"Błąd Google Tasks: {e}")
 
-def write_github_step_summary(digest_rows, health_msg=""):
+def write_github_step_summary(digest_rows: List[Dict[str, Any]], health_msg: str = "") -> None:
     summary_file = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_file:
         try:
@@ -129,7 +136,7 @@ def write_github_step_summary(digest_rows, health_msg=""):
         except Exception as e:
             logging.error(f"Błąd zapisu GITHUB_STEP_SUMMARY: {e}")
 
-async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache: dict, digest_rows: list):
+async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache: Dict[str, Any], digest_rows: List[Dict[str, Any]]) -> None:
     if not TELEGRAM_TOKEN:
         return
     last_offset = cache.get("telegram_update_offset", 0)
@@ -159,7 +166,7 @@ async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache:
 
 
 # --- 4. FUNKCJE ANALITYCZNE I MATEMATYCZNE ---
-def check_bullish_divergence(df_4h, lookback=35):
+def check_bullish_divergence(df_4h: pd.DataFrame, lookback: int = 35) -> bool:
     try:
         if len(df_4h) < lookback + 5:
             return False
@@ -187,13 +194,11 @@ def check_bullish_divergence(df_4h, lookback=35):
         valid_distance = 3 <= (curr_pivot[0] - prev_pivot[0]) <= 25
         is_recent_pivot = (n - 1 - curr_pivot[0]) <= 5
 
-        if price_lower and rsi_higher and rsi_oversold and valid_distance and is_recent_pivot:
-            return True
+        return bool(price_lower and rsi_higher and rsi_oversold and valid_distance and is_recent_pivot)
     except Exception:
-        pass
-    return False
+        return False
 
-def calculate_position_size(price, sl_price, fixed_risk=FIXED_RISK_NATIVE):
+def calculate_position_size(price: float, sl_price: float, fixed_risk: float = FIXED_RISK_NATIVE) -> float:
     try:
         if price <= sl_price or sl_price <= 0:
             return 0.0
@@ -204,14 +209,15 @@ def calculate_position_size(price, sl_price, fixed_risk=FIXED_RISK_NATIVE):
     except Exception:
         return 0.0
 
-def compute_indicators(df_1d, df_4h, df_15m):
+def compute_indicators(df_1d: pd.DataFrame, df_4h: pd.DataFrame, df_15m: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    # 1D Indicators
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
-    
     delta_1d = df_1d['close'].diff()
     gain_1d = delta_1d.where(delta_1d > 0, 0).ewm(alpha=1/14, adjust=False).mean()
     loss_1d = (-delta_1d.where(delta_1d < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
     df_1d['RSI'] = 100 - (100 / (1 + (gain_1d / loss_1d)))
 
+    # 4H Indicators
     df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
     df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
     
@@ -245,6 +251,7 @@ def compute_indicators(df_1d, df_4h, df_15m):
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)
     df_4h['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean()
 
+    # 15M Indicators
     delta_15m = df_15m['close'].diff()
     gain_15m = delta_15m.where(delta_15m > 0, 0).ewm(alpha=1/14, adjust=False).mean()
     loss_15m = (-delta_15m.where(delta_15m < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
@@ -254,7 +261,7 @@ def compute_indicators(df_1d, df_4h, df_15m):
 
 
 # --- 5. ASYNCHRONICZNE POBIERANIE DANYCH ---
-async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retries=3, delay=2.0):
+async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 250, retries: int = 3, delay: float = 2.0) -> List[Any]:
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
             try:
@@ -264,14 +271,14 @@ async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retrie
                     logging.error(f"Wypróbowano {retries} prób dla {symbol} ({timeframe}). Ostatni błąd: {e}")
                     raise e
                 sleep_time = delay * (2 ** attempt)
-                logging.warning(f"Odrzucenie/Timeout z Krakena dla {symbol} [{timeframe}] (Próba {attempt + 1}/{retries}). Odczekanie {sleep_time}s...")
+                logging.warning(f"Timeout z Krakena dla {symbol} [{timeframe}] (Próba {attempt + 1}/{retries}). Odczekanie {sleep_time}s...")
                 await asyncio.sleep(sleep_time)
             except Exception as e:
                 if attempt == retries - 1:
                     raise e
                 await asyncio.sleep(delay)
 
-async def fetch_symbol_data(exchange, symbol):
+async def fetch_symbol_data(exchange: ccxt.Exchange, symbol: str) -> Tuple[str, Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     try:
         res_1d, res_4h, res_15m = await asyncio.gather(
             fetch_ohlcv_retry_async(exchange, symbol, "1d", 250),
@@ -286,9 +293,9 @@ async def fetch_symbol_data(exchange, symbol):
 
 
 # --- 6. GŁÓWNA PĘTLA APLIKACJI ---
-async def main():
+async def main() -> None:
     start_time = time.time()
-    logging.info("Uruchamianie Skanera Krypto (Tryb Hybrydowy)...")
+    logging.info("Uruchamianie Skanera Krypto (Tryb Hybrydowy - Professional Grade)...")
     
     uk_now = datetime.now(ZoneInfo("Europe/London"))
     today_str = uk_now.strftime("%Y-%m-%d")
@@ -323,32 +330,32 @@ async def main():
                     continue
 
                 is_core = symbol in CORE_CRYPTO
-                # Przeniesienie ciężkich obliczeń wskaźników do puli wątków dla pełnej asynchroniczności i wydajności
                 df_1d, df_4h, df_15m = await asyncio.to_thread(compute_indicators, df_1d, df_4h, df_15m)
 
                 is_uptrend_1d = df_1d['close'].iloc[-1] > df_1d['EMA_200'].iloc[-1]
+                is_uptrend_4h = df_4h['close'].iloc[-2] > df_4h['EMA_50'].iloc[-2]
                 ts_closed = int(df_4h['ts'].iloc[-2])
                 adx_closed = df_4h['ADX'].iloc[-2]
 
                 has_bullish_div = await asyncio.to_thread(check_bullish_divergence, df_4h)
 
-                rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
-                rsi_1d_closed = round(df_1d['RSI'].iloc[-1], 1)
+                rsi_4h_closed = round(float(df_4h['RSI'].iloc[-2]), 1)
+                rsi_1d_closed = round(float(df_1d['RSI'].iloc[-1]), 1)
                 
-                close_closed = df_4h['close'].iloc[-2]
-                low_closed = df_4h['l'].iloc[-2]
+                close_closed = float(df_4h['close'].iloc[-2])
+                low_closed = float(df_4h['l'].iloc[-2])
 
-                bb_lower_closed = df_4h['BB_lower'].iloc[-2]
-                avg_atr = df_4h['ATR_MA'].iloc[-2]
-                atr_val = df_4h['ATR'].iloc[-2] if not pd.isna(df_4h['ATR'].iloc[-2]) else 0.0
+                bb_lower_closed = float(df_4h['BB_lower'].iloc[-2])
+                avg_atr = float(df_4h['ATR_MA'].iloc[-2]) if not pd.isna(df_4h['ATR_MA'].iloc[-2]) else 0.0
+                atr_val = float(df_4h['ATR'].iloc[-2]) if not pd.isna(df_4h['ATR'].iloc[-2]) else 0.0
 
-                is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
+                is_anomaly_candle = atr_val > (avg_atr * 2.5) if avg_atr > 0 else False
 
                 sl_multiplier = 2.0
                 curr_symbol_native = "$" if symbol.endswith("/USD") else "£"
 
                 display_price = f"{curr_symbol_native}{close_closed:.4f}" if close_closed < 1 else f"{curr_symbol_native}{close_closed:.2f}"
-                sl_calc = max(0, min(close_closed - sl_multiplier * atr_val, low_closed))
+                sl_calc = max(0.0, min(close_closed - sl_multiplier * atr_val, low_closed))
                 sl_str = f"{curr_symbol_native}{sl_calc:.4f}" if sl_calc < 1 else f"{curr_symbol_native}{sl_calc:.2f}"
 
                 position_size = calculate_position_size(close_closed, sl_calc, FIXED_RISK_NATIVE)
@@ -371,9 +378,10 @@ async def main():
 
                 current_signal_type = "NONE"
                 rsi_trend_threshold = 45.0 if is_core else 28.0
+                is_strong_trend = adx_closed >= 20.0
 
                 if not is_anomaly_candle:
-                    if is_uptrend_1d and rsi_4h_closed <= rsi_trend_threshold:
+                    if is_uptrend_1d and is_uptrend_4h and rsi_4h_closed <= rsi_trend_threshold and is_strong_trend:
                         current_signal_type = "BUY_TREND"
                     elif has_bullish_div or rsi_4h_closed <= 25.0 or close_closed <= bb_lower_closed:
                         current_signal_type = "BUY_REBOUND"
@@ -391,7 +399,7 @@ async def main():
                 digest_lines.append(f"🪙 {sym_link}: {display_price} | RSI: {rsi_4h_closed} | Trend: {trend_txt} | {status_txt}{div_tag}\n")
                 digest_summary_rows.append({
                     'symbol': symbol, 'price': display_price,
-                    'rsi': rsi_4h_closed, 'adx': round(adx_closed, 1),
+                    'rsi': rsi_4h_closed, 'adx': round(float(adx_closed), 1),
                     'trend': trend_txt, 'status': status_txt, 'div_tag': div_tag
                 })
 
@@ -425,8 +433,8 @@ async def main():
                         msg = (
                             f"🟢 **STABILNE KUPNO W TRENDZIE WZROSTOWYM**\n\n"
                             f"🪙 **Moneta:** `{symbol}` | **Cena:** `{display_price}`\n"
-                            f"📊 **RSI 4H:** `{rsi_4h_closed}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
-                            f"📈 **Trend 1D:** `Wzrostowy 🟢`\n"
+                            f"📊 **RSI 4H:** `{rsi_4h_closed}` | **ADX 4H:** `{round(float(adx_closed), 1)}`\n"
+                            f"📈 **Trend 1D/4H:** `Wzrostowy 🟢`\n"
                             f"⚖️ **Pozycja (Ryzyko {curr_symbol_native}{int(FIXED_RISK_NATIVE)}):** `{pos_size_str}`\n"
                             f"🛡 **Stop Loss:** `{sl_str}`\n\n"
                             f"💡 *Zrealizuj zysk z ręki na Trading 212!*\n\n🔗 {t212_link}"
@@ -498,7 +506,7 @@ async def main():
 
             if uk_now.hour >= 21 and cache.get("DIGEST_DATE") != today_str:
                 if digest_lines:
-                    digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines) + "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
+                    digest_msg = "📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO)**\n\n" + "".join(digest_lines) + "\n📎 🔊 [Handluj na Trading 212](https://live.trading212.com/)"
                     await asyncio.gather(
                         send_telegram_alert_async(http_client, digest_msg),
                         add_to_tasks_async(tasks_service, f"Codzienny Digest ({today_str})", digest_msg.replace('**', ''))
@@ -520,7 +528,7 @@ if __name__ == "__main__":
         logging.critical(f"KRYTYCZNY BŁĄD SKANERA KRYPTO: {e}", exc_info=True)
         err_msg = f"🚨 **🔴 KRYTYCZNY BŁĄD SKANERA KRYPTO:**\n`{str(e)}`"
         
-        async def send_critical_error():
+        async def send_critical_error() -> None:
             async with httpx.AsyncClient() as http_client:
                 await send_telegram_alert_async(http_client, err_msg)
         
