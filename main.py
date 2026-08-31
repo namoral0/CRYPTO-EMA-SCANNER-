@@ -459,7 +459,7 @@ async def main() -> None:
                             f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy/Korekta 🟡'}`\n"
                             f"⚖️ **Pozycja (Ryzyko {curr_symbol_native}{int(FIXED_RISK_NATIVE)}):** `{pos_size_str}`\n"
                             f"🛡 **Stop Loss:** `{sl_str}`\n\n"
-                            f"⚠️ *To szybki swing! Jak zobaczysz zielony wynik, natychmiast zgarnij zysk z ręki!*\n\n🔗 {t212_link}"
+                            f"⚠️ *To szybki swing! Jak zobaczysz zielony wynik, natychmiast zgarnij zysk do ręki!*\n\n🔗 {t212_link}"
                         )
 
                     pending_alerts.append((
