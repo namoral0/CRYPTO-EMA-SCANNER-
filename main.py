@@ -207,7 +207,6 @@ def calculate_position_size(price, sl_price, fixed_risk=FIXED_RISK_NATIVE):
 def compute_indicators(df_1d, df_4h, df_15m):
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
     
-    # KOREKTA: DODANO WYLICZANIE RSI 1D
     delta_1d = df_1d['close'].diff()
     gain_1d = delta_1d.where(delta_1d > 0, 0).ewm(alpha=1/14, adjust=False).mean()
     loss_1d = (-delta_1d.where(delta_1d < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
@@ -324,13 +323,14 @@ async def main():
                     continue
 
                 is_core = symbol in CORE_CRYPTO
-                df_1d, df_4h, df_15m = compute_indicators(df_1d, df_4h, df_15m)
+                # Przeniesienie ciężkich obliczeń wskaźników do puli wątków dla pełnej asynchroniczności i wydajności
+                df_1d, df_4h, df_15m = await asyncio.to_thread(compute_indicators, df_1d, df_4h, df_15m)
 
                 is_uptrend_1d = df_1d['close'].iloc[-1] > df_1d['EMA_200'].iloc[-1]
                 ts_closed = int(df_4h['ts'].iloc[-2])
                 adx_closed = df_4h['ADX'].iloc[-2]
 
-                has_bullish_div = check_bullish_divergence(df_4h)
+                has_bullish_div = await asyncio.to_thread(check_bullish_divergence, df_4h)
 
                 rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
                 rsi_1d_closed = round(df_1d['RSI'].iloc[-1], 1)
@@ -479,7 +479,6 @@ async def main():
                     alert_coroutines.append(send_telegram_alert_async(http_client, msg))
                     alert_coroutines.append(add_to_tasks_async(tasks_service, task_title, msg.replace('**', '')))
                     
-                    # BEZPIECZNE MAPOWANIE GOOGLE SHEETS
                     rows_to_append_sheets.append([
                         now_str,        # Kolumna A: Data i czas
                         meta['symbol'], # Kolumna B: Symbol
