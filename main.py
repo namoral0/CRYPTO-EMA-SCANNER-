@@ -33,7 +33,7 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-FIXED_RISK_GBP = 10.0
+FIXED_RISK_NATIVE = 10.0  # £10 dla GBP / $10 dla USD (bez przeliczania kursowego)
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
@@ -193,11 +193,11 @@ def check_bullish_divergence(df_4h, lookback=35):
         pass
     return False
 
-def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
+def calculate_position_size(price, sl_price, fixed_risk=FIXED_RISK_NATIVE):
     try:
-        if price_gbp <= sl_gbp or sl_gbp <= 0:
+        if price <= sl_price or sl_price <= 0:
             return 0.0
-        risk_pct = (price_gbp - sl_gbp) / price_gbp
+        risk_pct = (price - sl_price) / price
         if risk_pct <= 0:
             return 0.0
         return round(fixed_risk / risk_pct, 2)
@@ -206,6 +206,12 @@ def calculate_position_size(price_gbp, sl_gbp, fixed_risk=FIXED_RISK_GBP):
 
 def compute_indicators(df_1d, df_4h, df_15m):
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
+    
+    # KOREKTA: DODANO WYLICZANIE RSI 1D
+    delta_1d = df_1d['close'].diff()
+    gain_1d = delta_1d.where(delta_1d > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+    loss_1d = (-delta_1d.where(delta_1d < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
+    df_1d['RSI'] = 100 - (100 / (1 + (gain_1d / loss_1d)))
 
     df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
     df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
@@ -266,14 +272,6 @@ async def fetch_ohlcv_retry_async(exchange, symbol, timeframe, limit=250, retrie
                     raise e
                 await asyncio.sleep(delay)
 
-async def fetch_ticker_safe(exchange, symbol):
-    async with KRAKEN_SEMAPHORE:
-        try:
-            return await exchange.fetch_ticker(symbol)
-        except Exception as e:
-            logging.warning(f"Nie udało się pobrać tickeru {symbol}: {e}")
-            return None
-
 async def fetch_symbol_data(exchange, symbol):
     try:
         res_1d, res_4h, res_15m = await asyncio.gather(
@@ -304,63 +302,12 @@ async def main():
         'enableRateLimit': True,
         'timeout': 15000
     })
-    usd_gbp_rate = 0.78
     elapsed = 0.0
 
     async with httpx.AsyncClient() as http_client:
         try:
-            btc_tasks = [
-                fetch_ticker_safe(exchange, "GBP/USD"),
-                fetch_ohlcv_retry_async(exchange, "BTC/GBP", "1d", 250),
-                fetch_ohlcv_retry_async(exchange, "BTC/GBP", "4h", 300),
-                fetch_ohlcv_retry_async(exchange, "BTC/GBP", "15m", 100),
-                fetch_ohlcv_retry_async(exchange, "BTC/USD", "1d", 250),
-                fetch_ohlcv_retry_async(exchange, "BTC/USD", "4h", 300),
-                fetch_ohlcv_retry_async(exchange, "BTC/USD", "15m", 100),
-            ]
-            
-            btc_results = await asyncio.gather(*btc_tasks, return_exceptions=True)
-            
-            ticker_gbp = btc_results[0]
-            if ticker_gbp and not isinstance(ticker_gbp, Exception) and isinstance(ticker_gbp, dict) and ticker_gbp.get('last'):
-                usd_gbp_rate = 1.0 / ticker_gbp['last']
-            else:
-                logging.warning("Użycie domyślnego kursu USD/GBP: 0.78")
-
-            if any(isinstance(res, Exception) for res in btc_results[1:]):
-                raise RuntimeError("Błąd krytyczny pobierania danych bazowych BTC.")
-
-            _, btc_gbp_1d, btc_gbp_4h, btc_gbp_15m, btc_usd_1d, btc_usd_4h, btc_usd_15m = btc_results
-
-            cols = ['ts', 'o', 'h', 'l', 'close', 'v']
-            btc_cache = {
-                "BTC/GBP": {
-                    "1d": pd.DataFrame(btc_gbp_1d, columns=cols),
-                    "4h": pd.DataFrame(btc_gbp_4h, columns=cols),
-                    "15m": pd.DataFrame(btc_gbp_15m, columns=cols)
-                },
-                "BTC/USD": {
-                    "1d": pd.DataFrame(btc_usd_1d, columns=cols),
-                    "4h": pd.DataFrame(btc_usd_4h, columns=cols),
-                    "15m": pd.DataFrame(btc_usd_15m, columns=cols)
-                },
-            }
-
-            fetch_tasks = [fetch_symbol_data(exchange, sym) for sym in SYMBOLS if sym not in btc_cache]
-            fetched_results = await asyncio.gather(*fetch_tasks)
-
-            results = []
-            for sym in SYMBOLS:
-                if sym in btc_cache:
-                    results.append((
-                        sym,
-                        btc_cache[sym]["1d"],
-                        btc_cache[sym]["4h"],
-                        btc_cache[sym]["15m"]
-                    ))
-                else:
-                    res = next((r for r in fetched_results if r[0] == sym), (sym, None, None, None))
-                    results.append(res)
+            fetch_tasks = [fetch_symbol_data(exchange, sym) for sym in SYMBOLS]
+            results = await asyncio.gather(*fetch_tasks)
 
             digest_lines = []
             digest_summary_rows = []
@@ -386,45 +333,34 @@ async def main():
                 has_bullish_div = check_bullish_divergence(df_4h)
 
                 rsi_4h_closed = round(df_4h['RSI'].iloc[-2], 1)
-                rsi_15m_closed = round(df_15m['RSI'].iloc[-2], 1)
+                rsi_1d_closed = round(df_1d['RSI'].iloc[-1], 1)
                 
                 close_closed = df_4h['close'].iloc[-2]
-                high_closed = df_4h['h'].iloc[-2]
                 low_closed = df_4h['l'].iloc[-2]
 
-                bb_upper_closed = df_4h['BB_upper'].iloc[-2]
                 bb_lower_closed = df_4h['BB_lower'].iloc[-2]
                 avg_atr = df_4h['ATR_MA'].iloc[-2]
                 atr_val = df_4h['ATR'].iloc[-2] if not pd.isna(df_4h['ATR'].iloc[-2]) else 0.0
 
-                current_vol = df_4h['v'].iloc[-2]
-                avg_vol = df_4h['Vol_MA'].iloc[-2]
-                vol_multiplier = current_vol / avg_vol if not pd.isna(avg_vol) and avg_vol > 0 else 0
                 is_anomaly_candle = df_4h['ATR'].iloc[-2] > (avg_atr * 2.5) if not pd.isna(avg_atr) and avg_atr > 0 else False
 
                 sl_multiplier = 2.0
+                curr_symbol_native = "$" if symbol.endswith("/USD") else "£"
 
-                if symbol.endswith("/USD"):
-                    price_gbp = close_closed * usd_gbp_rate
-                    low_gbp = low_closed * usd_gbp_rate
-                    display_price = f"£{price_gbp:.4f}" if price_gbp < 1 else f"£{price_gbp:.2f}"
-                    sl_calc_gbp = max(0, min((close_closed - sl_multiplier * atr_val) * usd_gbp_rate, low_gbp))
-                else:
-                    price_gbp = close_closed
-                    low_gbp = low_closed
-                    display_price = f"£{close_closed:.4f}" if close_closed < 1 else f"£{close_closed:.2f}"
-                    sl_calc_gbp = max(0, min(close_closed - sl_multiplier * atr_val, low_gbp))
+                display_price = f"{curr_symbol_native}{close_closed:.4f}" if close_closed < 1 else f"{curr_symbol_native}{close_closed:.2f}"
+                sl_calc = max(0, min(close_closed - sl_multiplier * atr_val, low_closed))
+                sl_str = f"{curr_symbol_native}{sl_calc:.4f}" if sl_calc < 1 else f"{curr_symbol_native}{sl_calc:.2f}"
 
-                sl_str = f"£{sl_calc_gbp:.4f}" if sl_calc_gbp < 1 else f"£{sl_calc_gbp:.2f}"
-                position_gbp = calculate_position_size(price_gbp, sl_calc_gbp, FIXED_RISK_GBP)
-                pos_size_str = f"£{position_gbp:.2f}" if position_gbp > 0 else "N/A"
+                position_size = calculate_position_size(close_closed, sl_calc, FIXED_RISK_NATIVE)
+                pos_size_str = f"{curr_symbol_native}{position_size:.2f}" if position_size > 0 else "N/A"
 
+                # Wykrywanie Stop Loss
                 if symbol in active_positions:
                     pos = active_positions[symbol]
                     sl_price = pos["sl_price"]
-                    if low_gbp <= sl_price:
-                        sl_disp = f"£{sl_price:.4f}" if sl_price < 1 else f"£{sl_price:.2f}"
-                        low_disp = f"£{low_gbp:.4f}" if low_gbp < 1 else f"£{low_gbp:.2f}"
+                    if low_closed <= sl_price:
+                        sl_disp = f"{curr_symbol_native}{sl_price:.4f}" if sl_price < 1 else f"{curr_symbol_native}{sl_price:.2f}"
+                        low_disp = f"{curr_symbol_native}{low_closed:.4f}" if low_closed < 1 else f"{curr_symbol_native}{low_closed:.2f}"
                         sl_msg = (
                             f"🔴 **STOP LOSS TRAFIONY dla {symbol}!**\n"
                             f"Pozycja z dnia: `{pos.get('date', 'N/A')}`\n"
@@ -455,7 +391,7 @@ async def main():
                 digest_lines.append(f"🪙 {sym_link}: {display_price} | RSI: {rsi_4h_closed} | Trend: {trend_txt} | {status_txt}{div_tag}\n")
                 digest_summary_rows.append({
                     'symbol': symbol, 'price': display_price,
-                    'rsi': rsi_4h_closed, 'adx': round(adx_closed,1),
+                    'rsi': rsi_4h_closed, 'adx': round(adx_closed, 1),
                     'trend': trend_txt, 'status': status_txt, 'div_tag': div_tag
                 })
 
@@ -476,12 +412,11 @@ async def main():
 
                 if should_alert:
                     t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
-                    risk_label = int(FIXED_RISK_GBP) if FIXED_RISK_GBP.is_integer() else FIXED_RISK_GBP
 
                     if current_signal_type in ["BUY_TREND", "BUY_REBOUND"]:
                         active_positions[symbol] = {
-                            "entry_price": price_gbp,
-                            "sl_price": sl_calc_gbp,
+                            "entry_price": close_closed,
+                            "sl_price": sl_calc,
                             "date": today_str
                         }
 
@@ -492,7 +427,7 @@ async def main():
                             f"🪙 **Moneta:** `{symbol}` | **Cena:** `{display_price}`\n"
                             f"📊 **RSI 4H:** `{rsi_4h_closed}` | **ADX 4H:** `{round(adx_closed, 1)}`\n"
                             f"📈 **Trend 1D:** `Wzrostowy 🟢`\n"
-                            f"⚖️ **Pozycja (Ryzyko £{risk_label}):** `{pos_size_str}`\n"
+                            f"⚖️ **Pozycja (Ryzyko {curr_symbol_native}{int(FIXED_RISK_NATIVE)}):** `{pos_size_str}`\n"
                             f"🛡 **Stop Loss:** `{sl_str}`\n\n"
                             f"💡 *Zrealizuj zysk z ręki na Trading 212!*\n\n🔗 {t212_link}"
                         )
@@ -503,7 +438,7 @@ async def main():
                             f"🪙 **Moneta:** `{symbol}` | **Cena:** `{display_price}`\n"
                             f"📊 **RSI 4H:** `{rsi_4h_closed}` (Mocne wyprzedanie)\n"
                             f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy/Korekta 🟡'}`\n"
-                            f"⚖️ **Pozycja (Ryzyko £{risk_label}):** `{pos_size_str}`\n"
+                            f"⚖️ **Pozycja (Ryzyko {curr_symbol_native}{int(FIXED_RISK_NATIVE)}):** `{pos_size_str}`\n"
                             f"🛡 **Stop Loss:** `{sl_str}`\n\n"
                             f"⚠️ *To szybki swing! Jak zobaczysz zielony wynik, natychmiast zgarnij zysk z ręki!*\n\n🔗 {t212_link}"
                         )
@@ -511,9 +446,11 @@ async def main():
                     pending_alerts.append((
                         task_title, msg, symbol, status_txt,
                         {
-                            'symbol': symbol, 'signal': current_signal_type,
-                            'price': display_price, 'rsi': rsi_4h_closed,
-                            'sl': sl_str, 'tp': 'Manualny TP'
+                            'symbol': symbol, 
+                            'status': status_txt,
+                            'price': display_price, 
+                            'rsi_4h': rsi_4h_closed,
+                            'rsi_1d': rsi_1d_closed
                         }
                     ))
 
@@ -541,10 +478,15 @@ async def main():
                 for task_title, msg, _, _, meta in pending_alerts:
                     alert_coroutines.append(send_telegram_alert_async(http_client, msg))
                     alert_coroutines.append(add_to_tasks_async(tasks_service, task_title, msg.replace('**', '')))
+                    
+                    # BEZPIECZNE MAPOWANIE GOOGLE SHEETS
                     rows_to_append_sheets.append([
-                        now_str, meta['symbol'], meta['signal'],
-                        meta['price'], f"RSI: {meta['rsi']}",
-                        f"SL: {meta['sl']}", f"TP: {meta['tp']}"
+                        now_str,        # Kolumna A: Data i czas
+                        meta['symbol'], # Kolumna B: Symbol
+                        meta['price'],  # Kolumna C: Cena
+                        meta['rsi_4h'], # Kolumna D: RSI 4H
+                        meta['rsi_1d'], # Kolumna E: RSI 1D
+                        meta['status']  # Kolumna F: Stan / Sygnał
                     ])
                 await asyncio.gather(*alert_coroutines)
 
