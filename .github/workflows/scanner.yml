@@ -1,45 +1,43 @@
 name: Run Crypto Scanner
 
 on:
-  schedule:
-    # Uruchamianie co 15 minut, 24/7 (darmowe i nielimitowane dla repozytorium publicznego)
-    - cron: '*/15 * * * *'
   workflow_dispatch: # Przycisk do ręcznego uruchamiania z panelu GitHub
-  repository_dispatch: # Wyzwalanie zewnętrznym API
+  repository_dispatch: # Wyzwalanie zewnętrznym API z cron-job.org
     types: [run-scanner]
+
+permissions:
+  contents: write
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Dostęp do zapisu pliku cache_krypto.json w repozytorium
 
     steps:
       - name: Pobranie kodu z repozytorium
         uses: actions/checkout@v4
 
-      - name: Konfiguracja środowiska Python
+      - name: Instalacja środowiska Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Instalacja wymaganych pakietów
+      - name: Instalacja bibliotek
         run: |
           python -m pip install --upgrade pip
-          pip install requests httpx pandas numpy gspread google-api-python-client google-auth ccxt tzdata
+          pip install requests ccxt pandas google-api-python-client google-auth httpx
 
-      - name: Wykonanie skanera Krypto
+      - name: Uruchomienie skanera krypto
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
           GOOGLE_TASK_LIST_ID: ${{ secrets.GOOGLE_TASK_LIST_ID }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python main.py
+        run: |
+          python main.py
 
-      - name: Zapisz plik cache do repozytorium
+      - name: Zapisanie pamięci cache w repozytorium
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "auto: aktualizacja cache_krypto.json [skip ci]"
-          file_pattern: "cache_krypto.json"
+          commit_message: "auto: aktualizacja cache.json [skip ci]"
+          file_pattern: "cache.json"
