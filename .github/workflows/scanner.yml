@@ -1,9 +1,8 @@
-
 name: Run Crypto Scanner
 
 on:
   schedule:
-    # Uruchamianie co 15 minut, 24/7 (nielimitowane dla repozytorium publicznego)
+    # Uruchamianie co 15 minut, 24/7 (darmowe i nielimitowane dla repozytorium publicznego)
     - cron: '*/15 * * * *'
   workflow_dispatch: # Przycisk do ręcznego uruchamiania z panelu GitHub
   repository_dispatch: # Wyzwalanie zewnętrznym API
