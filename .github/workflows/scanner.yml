@@ -2,18 +2,17 @@ name: Run Crypto Scanner
 
 on:
   schedule:
-    # Uruchamianie automatyczne co 15 minut
+    # Uruchamianie co 15 minut, 24/7 (darmowe i nielimitowane dla repozytoriów publicznych)
     - cron: '*/15 * * * *'
   workflow_dispatch: # Przycisk do ręcznego uruchamiania z panelu GitHub
-  push:
-    branches:
-      - main
+  repository_dispatch: # Wyzwalanie zewnętrznym API
+    types: [run-scanner]
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Pozwala skryptowi zapisywać i commitować plik cache_krypto.json
+      contents: write # Pozwala na automatyczny zapis pliku cache_krypto.json
 
     steps:
       - name: Pobranie kodu z repozytorium
@@ -23,12 +22,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip' # Pamięć podręczna pip – skraca czas instalacji pakietów do kilkunastu sekund
 
       - name: Instalacja wymaganych pakietów
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests httpx yfinance pandas numpy gspread google-api-python-client google-auth ccxt
 
       - name: Wykonanie skanera Krypto
         env:
@@ -38,7 +36,7 @@ jobs:
           GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
           GOOGLE_TASK_LIST_ID: ${{ secrets.GOOGLE_TASK_LIST_ID }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python main.py
+        run: python skaner.py
 
       - name: Zapisz plik cache do repozytorium
         uses: stefanzweifel/git-auto-commit-action@v5
