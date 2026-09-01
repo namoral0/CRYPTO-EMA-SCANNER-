@@ -1,47 +1,47 @@
 {
   "DIGEST_DATE": "2026-08-31",
   "TAO/USD": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "NONE",
     "last_alert_time": 0.0
   },
   "BTC/GBP": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "NONE",
     "last_alert_time": 0.0
   },
   "ETH/GBP": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "NONE",
     "last_alert_time": 0.0
   },
   "SOL/GBP": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "NONE",
     "last_alert_time": 0.0
   },
   "XRP/GBP": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "NONE",
     "last_alert_time": 0.0
   },
   "RENDER/USD": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "NONE",
     "last_alert_time": 1788135077.0381157
   },
   "SUI/GBP": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "NONE",
     "last_alert_time": 0.0
   },
   "LINK/GBP": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "BUY_REBOUND",
     "last_alert_time": 1788206940.8249316
   },
   "AAVE/GBP": {
-    "ts": 1788206400000,
+    "ts": 1788220800000,
     "signal": "NONE",
     "last_alert_time": 0.0
   },
