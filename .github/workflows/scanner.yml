@@ -36,7 +36,7 @@ jobs:
           GOOGLE_TASKS_CREDENTIALS: ${{ secrets.GOOGLE_TASKS_CREDENTIALS }}
           GOOGLE_TASK_LIST_ID: ${{ secrets.GOOGLE_TASK_LIST_ID }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python skaner.py
+        run: python main.py
 
       - name: Zapisz plik cache do repozytorium
         uses: stefanzweifel/git-auto-commit-action@v5
