@@ -76,5 +76,26 @@
       "date": "2026-09-02"
     }
   },
-  "telegram_update_offset": 946934772
+  "telegram_update_offset": 946934772,
+  "TAO/GBP": {
+    "ts": 1788336000000,
+    "signal": "BUY_REBOUND",
+    "last_alert_time": 1788359500.8532498,
+    "last_sent_rsi": 29.7,
+    "last_sent_price": 217.2218
+  },
+  "RENDER/GBP": {
+    "ts": 1788336000000,
+    "signal": "NONE",
+    "last_alert_time": 0.0,
+    "last_sent_rsi": 0.0,
+    "last_sent_price": 0.0
+  },
+  "ONDO/GBP": {
+    "ts": 1788336000000,
+    "signal": "BUY_REBOUND",
+    "last_alert_time": 1788359500.86245,
+    "last_sent_rsi": 37.9,
+    "last_sent_price": 0.34166
+  }
 }
