@@ -6,29 +6,29 @@
     "last_alert_time": 0.0
   },
   "BTC/GBP": {
-    "ts": 1788336000000,
-    "signal": "BUY_REBOUND",
+    "ts": 1788350400000,
+    "signal": "NONE",
     "last_alert_time": 1788355886.5027254,
     "last_sent_rsi": 38.8,
     "last_sent_price": 56965.6
   },
   "ETH/GBP": {
-    "ts": 1788336000000,
-    "signal": "BUY_REBOUND",
+    "ts": 1788350400000,
+    "signal": "NONE",
     "last_alert_time": 1788352284.9935334,
     "last_sent_rsi": 34.7,
     "last_sent_price": 1762.0
   },
   "SOL/GBP": {
-    "ts": 1788336000000,
-    "signal": "BUY_REBOUND",
+    "ts": 1788350400000,
+    "signal": "NONE",
     "last_alert_time": 1788352285.0051203,
     "last_sent_rsi": 32.8,
     "last_sent_price": 72.6
   },
   "XRP/GBP": {
-    "ts": 1788336000000,
-    "signal": "BUY_REBOUND",
+    "ts": 1788350400000,
+    "signal": "NONE",
     "last_alert_time": 1788352285.016819,
     "last_sent_rsi": 31.5,
     "last_sent_price": 0.98027
@@ -39,21 +39,21 @@
     "last_alert_time": 1788135077.0381157
   },
   "SUI/GBP": {
-    "ts": 1788336000000,
-    "signal": "BUY_REBOUND",
+    "ts": 1788350400000,
+    "signal": "NONE",
     "last_alert_time": 1788355886.5282588,
     "last_sent_rsi": 39.6,
     "last_sent_price": 0.5286
   },
   "LINK/GBP": {
-    "ts": 1788336000000,
+    "ts": 1788350400000,
     "signal": "NONE",
     "last_alert_time": 1788206940.8249316,
     "last_sent_rsi": 0.0,
     "last_sent_price": 0.0
   },
   "AAVE/GBP": {
-    "ts": 1788336000000,
+    "ts": 1788350400000,
     "signal": "NONE",
     "last_alert_time": 0.0,
     "last_sent_rsi": 0.0,
@@ -78,24 +78,24 @@
   },
   "telegram_update_offset": 946934772,
   "TAO/GBP": {
-    "ts": 1788336000000,
+    "ts": 1788350400000,
     "signal": "BUY_REBOUND",
-    "last_alert_time": 1788363085.3172486,
+    "last_alert_time": 1788364914.834616,
     "last_sent_rsi": 29.7,
-    "last_sent_price": 160.84784669154672
+    "last_sent_price": 160.90121252972065
   },
   "RENDER/GBP": {
-    "ts": 1788336000000,
+    "ts": 1788350400000,
     "signal": "NONE",
     "last_alert_time": 0.0,
     "last_sent_rsi": 0.0,
     "last_sent_price": 0.0
   },
   "ONDO/GBP": {
-    "ts": 1788336000000,
+    "ts": 1788350400000,
     "signal": "BUY_REBOUND",
-    "last_alert_time": 1788363085.3297963,
-    "last_sent_rsi": 37.9,
-    "last_sent_price": 0.25299152893785914
+    "last_alert_time": 1788364914.8438325,
+    "last_sent_rsi": 37.3,
+    "last_sent_price": 0.2526683801580658
   }
 }
