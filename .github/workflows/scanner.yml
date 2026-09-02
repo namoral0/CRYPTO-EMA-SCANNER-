@@ -39,5 +39,5 @@ jobs:
       - name: Zapisanie pamięci cache w repozytorium
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "auto: aktualizacja cache.json [skip ci]"
-          file_pattern: "cache.json"
+          commit_message: "auto: aktualizacja cache_krypto.json [skip ci]"
+          file_pattern: "cache_krypto.json"
