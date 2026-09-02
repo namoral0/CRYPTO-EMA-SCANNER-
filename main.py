@@ -411,13 +411,23 @@ async def main() -> None:
                 last_ts = symbol_cache.get("ts", 0)
                 last_signal = symbol_cache.get("signal", "NONE")
                 last_alert_time = symbol_cache.get("last_alert_time", 0.0)
+                last_sent_rsi = symbol_cache.get("last_sent_rsi", 0.0)
+                last_sent_price = symbol_cache.get("last_sent_price", 0.0)
 
                 current_epoch = time.time()
-                is_cooldown_active = (current_signal_type == last_signal) and (current_epoch - last_alert_time < SIGNAL_COOLDOWN_SECONDS)
+
+                # --- KONTROLA DUPLIKATÓW PRZEZ SPRAWDZENIE ZMIANY RSI ORAZ CENY ---
+                rsi_changed = abs(rsi_4h_closed - last_sent_rsi) >= 0.5
+                price_changed = abs(close_closed - last_sent_price) > (0.001 * close_closed if last_sent_price > 0 else 0.0)
 
                 should_alert = False
-                if current_signal_type != "NONE" and not is_cooldown_active:
-                    if last_ts != ts_closed or last_signal != current_signal_type:
+                if current_signal_type != "NONE":
+                    # Wyślij alert tylko gdy:
+                    # 1. Zmienił się sam sygnał (np. z NONE na BUY_REBOUND)
+                    # 2. LUB w obrębie tego samego sygnału RSI zmieniło się o >= 0.5 lub cena o > 0.1% (min. 30 min przerwy)
+                    if last_signal != current_signal_type:
+                        should_alert = True
+                    elif (rsi_changed or price_changed) and (current_epoch - last_alert_time >= 1800):
                         should_alert = True
 
                 signal_to_save = current_signal_type if current_signal_type != "NONE" else (last_signal if last_ts == ts_closed else "NONE")
@@ -477,7 +487,9 @@ async def main() -> None:
                 cache[symbol] = {
                     "ts": ts_closed, 
                     "signal": signal_to_save,
-                    "last_alert_time": current_epoch if should_alert else last_alert_time
+                    "last_alert_time": current_epoch if should_alert else last_alert_time,
+                    "last_sent_rsi": rsi_4h_closed if should_alert else last_sent_rsi,
+                    "last_sent_price": close_closed if should_alert else last_sent_price
                 }
                 success_count += 1
 
