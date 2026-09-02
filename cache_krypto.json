@@ -80,9 +80,9 @@
   "TAO/GBP": {
     "ts": 1788336000000,
     "signal": "BUY_REBOUND",
-    "last_alert_time": 1788359500.8532498,
+    "last_alert_time": 1788363085.3172486,
     "last_sent_rsi": 29.7,
-    "last_sent_price": 217.2218
+    "last_sent_price": 160.84784669154672
   },
   "RENDER/GBP": {
     "ts": 1788336000000,
@@ -94,8 +94,8 @@
   "ONDO/GBP": {
     "ts": 1788336000000,
     "signal": "BUY_REBOUND",
-    "last_alert_time": 1788359500.86245,
+    "last_alert_time": 1788363085.3297963,
     "last_sent_rsi": 37.9,
-    "last_sent_price": 0.34166
+    "last_sent_price": 0.25299152893785914
   }
 }
