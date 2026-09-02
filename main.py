@@ -98,20 +98,27 @@ async def send_telegram_alert_async(http_client: httpx.AsyncClient, msg: str, cu
     except Exception as e:
         logging.error(f"Nie udało się wysłać wiadomości na Telegram: {e}")
 
-async def add_to_tasks_async(tasks_service, title, notes):
+async def add_to_tasks_async(tasks_service, title, notes, retries=3):
+    """Dodaje zadanie do Google Tasks z automatycznym ponawianiem w przypadku błędu SSL/sieci."""
     if not tasks_service:
         return
     async with GOOGLE_SEMAPHORE:
-        try:
-            await asyncio.to_thread(
-                lambda: tasks_service.tasks().insert(
-                    tasklist=GOOGLE_TASK_LIST_ID, 
-                    body={'title': title, 'notes': notes}
-                ).execute()
-            )
-            logging.info(f"Dodano zadanie do Google Tasks: {title}")
-        except Exception as e:
-            logging.error(f"Błąd Google Tasks: {e}")
+        for attempt in range(retries):
+            try:
+                await asyncio.to_thread(
+                    lambda: tasks_service.tasks().insert(
+                        tasklist=GOOGLE_TASK_LIST_ID, 
+                        body={'title': title, 'notes': notes}
+                    ).execute()
+                )
+                logging.info(f"Dodano zadanie do Google Tasks: {title}")
+                return
+            except Exception as e:
+                if attempt < retries - 1:
+                    logging.warning(f"Próba {attempt + 1}/{retries} Google Tasks nie powiodła się ({e}). Ponawiam za 1.0s...")
+                    await asyncio.sleep(1.0)
+                else:
+                    logging.error(f"Błąd Google Tasks po {retries} próbach: {e}")
 
 def write_github_step_summary(digest_rows, health_msg=""):
     summary_file = os.getenv("GITHUB_STEP_SUMMARY")
@@ -252,10 +259,10 @@ async def main():
                 is_pinbar = bool(last_row['pinbar'])
                 ts_closed = int(last_row['timestamp'] / 1000)
 
-                # Symbol do prawidłowego wykresu na TradingView (oryginalna para na Krakenie)
+                # Prawidłowa nazwa symbolu na TradingView (Kraken)
                 tv_clean_symbol = symbol.replace("/", "")
 
-                # Standaryzacja wyświetlania waluty do GBP pod Trading 212
+                # Standaryzacja waluty do GBP pod Trading 212
                 if 'USD' in symbol:
                     price_gbp = price_native * usd_to_gbp
                     symbol_display = symbol.replace('USD', 'GBP')
