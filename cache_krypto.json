@@ -6,24 +6,32 @@
     "last_alert_time": 0.0
   },
   "BTC/GBP": {
-    "ts": 1788264000000,
+    "ts": 1788336000000,
     "signal": "NONE",
-    "last_alert_time": 0.0
+    "last_alert_time": 0.0,
+    "last_sent_rsi": 0.0,
+    "last_sent_price": 0.0
   },
   "ETH/GBP": {
-    "ts": 1788264000000,
-    "signal": "NONE",
-    "last_alert_time": 0.0
+    "ts": 1788336000000,
+    "signal": "BUY_REBOUND",
+    "last_alert_time": 1788352284.9935334,
+    "last_sent_rsi": 34.7,
+    "last_sent_price": 1762.0
   },
   "SOL/GBP": {
-    "ts": 1788264000000,
-    "signal": "NONE",
-    "last_alert_time": 0.0
+    "ts": 1788336000000,
+    "signal": "BUY_REBOUND",
+    "last_alert_time": 1788352285.0051203,
+    "last_sent_rsi": 32.8,
+    "last_sent_price": 72.6
   },
   "XRP/GBP": {
-    "ts": 1788264000000,
-    "signal": "NONE",
-    "last_alert_time": 0.0
+    "ts": 1788336000000,
+    "signal": "BUY_REBOUND",
+    "last_alert_time": 1788352285.016819,
+    "last_sent_rsi": 31.5,
+    "last_sent_price": 0.98027
   },
   "RENDER/USD": {
     "ts": 1788264000000,
@@ -31,25 +39,41 @@
     "last_alert_time": 1788135077.0381157
   },
   "SUI/GBP": {
-    "ts": 1788264000000,
+    "ts": 1788336000000,
     "signal": "NONE",
-    "last_alert_time": 0.0
+    "last_alert_time": 0.0,
+    "last_sent_rsi": 0.0,
+    "last_sent_price": 0.0
   },
   "LINK/GBP": {
-    "ts": 1788264000000,
+    "ts": 1788336000000,
     "signal": "NONE",
-    "last_alert_time": 1788206940.8249316
+    "last_alert_time": 1788206940.8249316,
+    "last_sent_rsi": 0.0,
+    "last_sent_price": 0.0
   },
   "AAVE/GBP": {
-    "ts": 1788264000000,
+    "ts": 1788336000000,
     "signal": "NONE",
-    "last_alert_time": 0.0
+    "last_alert_time": 0.0,
+    "last_sent_rsi": 0.0,
+    "last_sent_price": 0.0
   },
   "active_positions": {
-    "LINK/GBP": {
-      "entry_price": 8.425,
-      "sl_price": 8.173142857142858,
-      "date": "2026-08-31"
+    "ETH/GBP": {
+      "entry_price": 1762.0,
+      "sl_price": 1715.0385714285715,
+      "date": "2026-09-02"
+    },
+    "SOL/GBP": {
+      "entry_price": 72.6,
+      "sl_price": 70.01857142857142,
+      "date": "2026-09-02"
+    },
+    "XRP/GBP": {
+      "entry_price": 0.98027,
+      "sl_price": 0.9472914285714285,
+      "date": "2026-09-02"
     }
   },
   "telegram_update_offset": 946934772
