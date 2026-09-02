@@ -232,7 +232,7 @@ def compute_indicators(df_1d: pd.DataFrame, df_4h: pd.DataFrame) -> Tuple[pd.Dat
     return df_1d, df_4h
 
 
-# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH + AUTOMATYCZNY FALLBACK DLA /USD ---
+# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH Z ODPORNOŚCIĄ NA BŁĘDY KRAKENA ---
 async def get_valid_symbol(exchange: ccxt.Exchange, symbol: str) -> str:
     """Sprawdza czy para /GBP istnieje na Krakenie. Jeśli nie, automatycznie przełącza na /USD."""
     if not exchange.markets:
@@ -247,7 +247,8 @@ async def get_valid_symbol(exchange: ccxt.Exchange, symbol: str) -> str:
     
     return symbol
 
-async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 250, retries: int = 3, delay: float = 0.5) -> List[Any]:
+async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 250, retries: int = 4, delay: float = 1.0) -> List[Any]:
+    """Pobiera dane świecowe z automatycznym powtarzaniem (exponential backoff) w razie awarii serwerów Krakena."""
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
             try:
@@ -255,7 +256,7 @@ async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timefram
             except Exception as e:
                 if attempt == retries - 1:
                     raise e
-                await asyncio.sleep(delay)
+                await asyncio.sleep(delay * (attempt + 1))
 
 async def fetch_symbol_data(exchange: ccxt.Exchange, symbol: str) -> Tuple[str, str, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     try:
