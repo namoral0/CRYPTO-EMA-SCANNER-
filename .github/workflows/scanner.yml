@@ -1,8 +1,8 @@
 name: Run Crypto Scanner
 
 on:
-  workflow_dispatch: # Przycisk do ręcznego uruchamiania z panelu GitHub
-  repository_dispatch: # Wyzwalanie zewnętrznym API z cron-job.org
+  workflow_dispatch:
+  repository_dispatch:
     types: [run-scanner]
 
 permissions:
