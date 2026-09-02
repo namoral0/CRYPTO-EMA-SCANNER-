@@ -32,7 +32,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
-# BEZPIECZNE WYMUSZENIE DOMYŚLNEJ LISTY GOOGLE TASKS (ELIMINACJA BŁĘDU 400)
+# BEZPIECZNE WYMUSZENIE DOMYŚLNEJ LISTY GOOGLE TASKS
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
@@ -123,7 +123,7 @@ def write_github_step_summary(digest_rows: List[Dict[str, Any]], health_msg: str
                 if health_msg:
                     f.write(f"> {health_msg}\n\n")
                 f.write("### 📊 Podsumowanie Skanera Krypto\n\n")
-                f.write("| Moneta | Cena | RSI 4H | Formacja | Trend 1D | Stan |\n")
+                f.write("| Moneta | Cena (£) | RSI 4H | Formacja | Trend 1D | Stan |\n")
                 f.write("| --- | --- | --- | --- | --- | --- |\n")
                 for r in digest_rows:
                     f.write(f"| **{r['symbol']}** | {r['price']} | {r['rsi']} | {r['pinbar']} | {r['trend']} | {r['status']} |\n")
@@ -147,7 +147,7 @@ async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache:
                 chat_id = msg_obj.get("chat", {}).get("id")
 
                 if text.startswith(("/status", "/stan", "/start")):
-                    status_msg = "📋 **AKTUALNY STAN RYNKU (KRYPTO)**\n\n"
+                    status_msg = "📋 **AKTUALNY STAN RYNKU (KRYPTO - GBP)**\n\n"
                     for r in digest_rows:
                         sym = r['symbol']
                         tv_ticker = sym.replace("/", "")
@@ -163,7 +163,6 @@ async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache:
 
 # --- 4. FUNKCJE ANALITYCZNE ---
 def check_pinbar_4h(df_4h: pd.DataFrame) -> bool:
-    """Wykrywa knot popytowy (Pinbar) na ostatnio zamkniętej świecy 4H."""
     try:
         if len(df_4h) < 2:
             return False
@@ -210,10 +209,8 @@ def check_bullish_divergence(df_4h: pd.DataFrame, lookback: int = 35) -> bool:
         return False
 
 def compute_indicators(df_1d: pd.DataFrame, df_4h: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    # 1D Indicators
     df_1d['EMA_200'] = df_1d['close'].ewm(span=200, adjust=False).mean()
 
-    # 4H Indicators
     df_4h['EMA_50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
     
     delta_4h = df_4h['close'].diff()
@@ -221,7 +218,6 @@ def compute_indicators(df_1d: pd.DataFrame, df_4h: pd.DataFrame) -> Tuple[pd.Dat
     loss_4h = (-delta_4h.where(delta_4h < 0, 0)).ewm(alpha=1/14, adjust=False).mean().replace(0, 1e-10)
     df_4h['RSI'] = 100 - (100 / (1 + (gain_4h / loss_4h)))
     
-    # Bollinger Bands & BBW (Bollinger Band Width)
     df_4h['BB_mid'] = df_4h['close'].rolling(20).mean()
     df_4h['BB_std'] = df_4h['close'].rolling(20).std()
     df_4h['BB_upper'] = df_4h['BB_mid'] + (df_4h['BB_std'] * 2)
@@ -232,9 +228,8 @@ def compute_indicators(df_1d: pd.DataFrame, df_4h: pd.DataFrame) -> Tuple[pd.Dat
     return df_1d, df_4h
 
 
-# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH Z ODPORNOŚCIĄ NA BŁĘDY KRAKENA ---
+# --- 5. POBIERANIE DANYCH Z AUTOMATYCZNYM KURSOWANIEM USD -> GBP ---
 async def get_valid_symbol(exchange: ccxt.Exchange, symbol: str) -> str:
-    """Sprawdza czy para /GBP istnieje na Krakenie. Jeśli nie, automatycznie przełącza na /USD."""
     if not exchange.markets:
         await exchange.load_markets()
     
@@ -248,7 +243,6 @@ async def get_valid_symbol(exchange: ccxt.Exchange, symbol: str) -> str:
     return symbol
 
 async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 250, retries: int = 4, delay: float = 1.0) -> List[Any]:
-    """Pobiera dane świecowe z automatycznym powtarzaniem (exponential backoff) w razie awarii serwerów Krakena."""
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
             try:
@@ -290,6 +284,16 @@ async def main() -> None:
     async with httpx.AsyncClient() as http_client:
         try:
             await exchange.load_markets()
+
+            # Pobieramy aktualny kurs przeliczeniowy USD -> GBP z Krakena
+            usd_to_gbp_rate = 0.77  # Rezerwowy przelicznik
+            try:
+                gbp_usd_ticker = await exchange.fetch_ticker("GBP/USD")
+                if gbp_usd_ticker and gbp_usd_ticker.get('last'):
+                    usd_to_gbp_rate = 1.0 / float(gbp_usd_ticker['last'])
+            except Exception as e:
+                logging.warning(f"Nie udało się pobrać kursu GBP/USD z Krakena, używam domyślnego: {e}")
+
             results = await asyncio.gather(*[fetch_symbol_data(exchange, sym) for sym in SYMBOLS])
 
             digest_lines = []
@@ -302,7 +306,10 @@ async def main() -> None:
                     continue
 
                 is_core = original_symbol in CORE_CRYPTO
-                symbol_currency = "£" if active_symbol.endswith("/GBP") else "$"
+                is_usd_pair = active_symbol.endswith("/USD")
+
+                # Jeśli pobrano parę USD, przeliczamy ceny na GBP
+                conversion_factor = usd_to_gbp_rate if is_usd_pair else 1.0
 
                 df_1d, df_4h = await asyncio.to_thread(compute_indicators, df_1d, df_4h)
 
@@ -314,10 +321,12 @@ async def main() -> None:
                 has_pinbar = check_pinbar_4h(df_4h)
 
                 rsi_4h_closed = round(float(df_4h['RSI'].iloc[-2]), 1)
-                close_closed = float(df_4h['close'].iloc[-2])
-                bb_lower_closed = float(df_4h['BB_lower'].iloc[-2])
+                close_closed_usd = float(df_4h['close'].iloc[-2])
+                bb_lower_closed_usd = float(df_4h['BB_lower'].iloc[-2])
 
-                # DYNAMICZNY PRÓG ZMIENNOŚCI (BBW / SQUEEZE)
+                # Przeprowadzamy konwersję cenową na GBP dla alertu
+                close_closed = close_closed_usd * conversion_factor
+
                 bbw_curr = df_4h['BBW'].iloc[-2]
                 bbw_ma = df_4h['BBW_MA'].iloc[-2]
                 is_high_volatility = bbw_curr > bbw_ma
@@ -325,12 +334,12 @@ async def main() -> None:
                 base_thr = 36.0 if is_core else 28.0
                 buy_threshold = base_thr if is_high_volatility else (base_thr - 3.0)
 
-                display_price = f"{symbol_currency}{close_closed:.4f}" if close_closed < 1 else f"{symbol_currency}{close_closed:.2f}"
+                display_price = f"£{close_closed:.4f}" if close_closed < 1 else f"£{close_closed:.2f}"
 
                 current_signal_type = "NONE"
                 if is_uptrend_1d and is_uptrend_4h and rsi_4h_closed <= buy_threshold:
                     current_signal_type = "BUY_TREND"
-                elif has_bullish_div or rsi_4h_closed <= (buy_threshold - 3.0) or close_closed <= bb_lower_closed or (has_pinbar and rsi_4h_closed <= 40):
+                elif has_bullish_div or rsi_4h_closed <= (buy_threshold - 3.0) or close_closed_usd <= bb_lower_closed_usd or (has_pinbar and rsi_4h_closed <= 40):
                     current_signal_type = "BUY_REBOUND"
 
                 status_map = {
@@ -342,14 +351,15 @@ async def main() -> None:
                 trend_txt = "↗️ Wzrostowy" if is_uptrend_1d else "↘️ Spadkowy"
                 pinbar_txt = "🕯️ Pinbar 4H" if has_pinbar else "Brak"
 
+                # Wyświetlamy zawsze jako nazwa_symbolu/GBP dla Trading 212
                 tv_ticker = active_symbol.replace("/", "")
                 tv_link = f"[📈 Zobacz wykres na TradingView](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_ticker})"
                 t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
 
-                sym_link = f"[{active_symbol}](https://live.trading212.com/)"
+                sym_link = f"[{original_symbol}](https://live.trading212.com/)"
                 digest_lines.append(f"🪙 {sym_link}: {display_price} | RSI: {rsi_4h_closed} | {pinbar_txt} | {status_txt}\n")
                 digest_summary_rows.append({
-                    'symbol': active_symbol, 'price': display_price,
+                    'symbol': original_symbol, 'price': display_price,
                     'rsi': rsi_4h_closed, 'pinbar': pinbar_txt,
                     'trend': trend_txt, 'status': status_txt
                 })
@@ -386,10 +396,10 @@ async def main() -> None:
                     conf_msg = ("\n**Potwierdzenia techniczne:**\n" + "\n".join(confirmations)) if confirmations else ""
 
                     if current_signal_type == "BUY_TREND":
-                        task_title = f"TREND KUPNO: {active_symbol}"
+                        task_title = f"TREND KUPNO: {original_symbol}"
                         msg = (
                             f"🟢 **STABILNE KUPNO W TRENDZIE WZROSTOWYM**\n\n"
-                            f"🪙 **Moneta:** `{active_symbol}` | **Cena:** `{display_price}`\n"
+                            f"🪙 **Moneta:** `{original_symbol}` | **Cena:** `{display_price}`\n"
                             f"📊 **RSI 4H:** `{rsi_4h_closed}`\n"
                             f"📈 **Trend 1D:** `Wzrostowy 🟢`\n"
                             f"{conf_msg}\n\n"
@@ -397,10 +407,10 @@ async def main() -> None:
                             f"🔗 {tv_link}\n🔗 {t212_link}"
                         )
                     else:
-                        task_title = f"⚡️ SZYBKIE ODBICIE: {active_symbol}"
+                        task_title = f"⚡️ SZYBKIE ODBICIE: {original_symbol}"
                         msg = (
                             f"⚡️ **SZYBKA OKAZJA NA ODBICIE (SWING)**\n\n"
-                            f"🪙 **Moneta:** `{active_symbol}` | **Cena:** `{display_price}`\n"
+                            f"🪙 **Moneta:** `{original_symbol}` | **Cena:** `{display_price}`\n"
                             f"📊 **RSI 4H:** `{rsi_4h_closed}`\n"
                             f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy/Korekta 🟡'}`\n"
                             f"{conf_msg}\n\n"
@@ -409,8 +419,8 @@ async def main() -> None:
                         )
 
                     pending_alerts.append((
-                        task_title, msg, active_symbol, status_txt,
-                        {'symbol': active_symbol, 'status': status_txt, 'price': display_price, 'rsi_4h': rsi_4h_closed}
+                        task_title, msg, original_symbol, status_txt,
+                        {'symbol': original_symbol, 'status': status_txt, 'price': display_price, 'rsi_4h': rsi_4h_closed}
                     ))
 
                 cache[original_symbol] = {
