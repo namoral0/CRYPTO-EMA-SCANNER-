@@ -35,12 +35,13 @@ GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
-FIXED_RISK_NATIVE = 20.0  # £20 dla GBP / $20 dla USD
+FIXED_RISK_NATIVE = 20.0  # £20 ryzyka na pozycję
 
 CORE_CRYPTO = ["BTC/GBP", "ETH/GBP", "SOL/GBP"]
 SYMBOLS = [
-    "TAO/USD", "BTC/GBP", "ETH/GBP", "SOL/GBP", 
-    "XRP/GBP", "RENDER/USD", "SUI/GBP", "LINK/GBP", "AAVE/GBP"
+    "TAO/GBP", "RENDER/GBP", "ONDO/GBP",
+    "BTC/GBP", "ETH/GBP", "SOL/GBP", 
+    "XRP/GBP", "SUI/GBP", "LINK/GBP", "AAVE/GBP"
 ]
 CACHE_FILE = "cache_krypto.json"
 
@@ -353,7 +354,7 @@ async def main() -> None:
                 is_anomaly_candle = atr_val > (avg_atr * 2.5) if avg_atr > 0 else False
 
                 sl_multiplier = 2.0
-                curr_symbol_native = "$" if symbol.endswith("/USD") else "£"
+                curr_symbol_native = "£" if symbol.endswith("/GBP") else "$"
 
                 display_price = f"{curr_symbol_native}{close_closed:.4f}" if close_closed < 1 else f"{curr_symbol_native}{close_closed:.2f}"
                 sl_calc = max(0.0, min(close_closed - sl_multiplier * atr_val, low_closed))
@@ -422,9 +423,6 @@ async def main() -> None:
 
                 should_alert = False
                 if current_signal_type != "NONE":
-                    # Wyślij alert tylko gdy:
-                    # 1. Zmienił się sam sygnał (np. z NONE na BUY_REBOUND)
-                    # 2. LUB w obrębie tego samego sygnału RSI zmieniło się o >= 0.5 lub cena o > 0.1% (min. 30 min przerwy)
                     if last_signal != current_signal_type:
                         should_alert = True
                     elif (rsi_changed or price_changed) and (current_epoch - last_alert_time >= 1800):
