@@ -7,10 +7,10 @@
   },
   "BTC/GBP": {
     "ts": 1788336000000,
-    "signal": "NONE",
-    "last_alert_time": 0.0,
-    "last_sent_rsi": 0.0,
-    "last_sent_price": 0.0
+    "signal": "BUY_REBOUND",
+    "last_alert_time": 1788355886.5027254,
+    "last_sent_rsi": 38.8,
+    "last_sent_price": 56965.6
   },
   "ETH/GBP": {
     "ts": 1788336000000,
@@ -40,10 +40,10 @@
   },
   "SUI/GBP": {
     "ts": 1788336000000,
-    "signal": "NONE",
-    "last_alert_time": 0.0,
-    "last_sent_rsi": 0.0,
-    "last_sent_price": 0.0
+    "signal": "BUY_REBOUND",
+    "last_alert_time": 1788355886.5282588,
+    "last_sent_rsi": 39.6,
+    "last_sent_price": 0.5286
   },
   "LINK/GBP": {
     "ts": 1788336000000,
