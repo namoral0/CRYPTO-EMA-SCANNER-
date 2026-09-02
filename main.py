@@ -129,6 +129,36 @@ def write_github_step_summary(digest_rows: List[Dict[str, Any]], health_msg: str
         except Exception as e:
             logging.error(f"Błąd zapisu GITHUB_STEP_SUMMARY: {e}")
 
+async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache: dict, digest_rows: list):
+    if not TELEGRAM_TOKEN:
+        return
+
+    last_offset = cache.get("telegram_update_offset", 0)
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_offset + 1}&timeout=2"
+    try:
+        resp = await http_client.get(url, timeout=5.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            for update in data.get("result", []):
+                cache["telegram_update_offset"] = update["update_id"]
+                msg_obj = update.get("message", {})
+                text = msg_obj.get("text", "").strip().lower()
+                chat_id = msg_obj.get("chat", {}).get("id")
+
+                if text.startswith(("/status", "/stan", "/start")):
+                    status_msg = "📋 **AKTUALNY STAN RYNKU KRYPTO (GBP)**\n\n"
+                    for r in digest_rows:
+                        symbol = r['symbol']
+                        tv_ticker = symbol.replace("/GBP", "GBP")
+                        sym_link = f"[{symbol}](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_ticker})"
+                        status_msg += f"🪙 {sym_link}: {r['price']} | RSI: {r['rsi']} | {r['pinbar']} | {r['status']}\n"
+                    status_msg += "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
+                    target_chat = chat_id or TELEGRAM_CHAT_ID
+                    if target_chat:
+                        await send_telegram_alert_async(http_client, status_msg, custom_chat_id=target_chat)
+    except Exception as e:
+        logging.error(f"Błąd przetwarzania komend Telegram: {e}")
+
 
 # --- 4. FUNKCJE ANALITYCZNE ---
 def check_pinbar_4h(df_4h: pd.DataFrame) -> bool:
@@ -377,6 +407,7 @@ async def main() -> None:
             health_summary = f"🩺 **Autodiagnostyka:** Przeanalizowano `{len(SYMBOLS)}` par w `{elapsed}s`."
 
             write_github_step_summary(digest_summary_rows, health_msg=health_summary)
+            await process_telegram_commands_async(http_client, cache, digest_summary_rows)
 
             if pending_alerts:
                 alert_coroutines = []
@@ -391,6 +422,16 @@ async def main() -> None:
                     await asyncio.to_thread(sheet.append_rows, rows_to_append_sheets)
                 except Exception as e:
                     logging.error(f"Błąd Google Sheets: {e}")
+
+            # CODZIENNE PODSUMOWANIE O GODZINIE 21:00+
+            if uk_now.hour >= 21 and cache.get('DIGEST_DATE') != today_str:
+                if digest_lines:
+                    digest_msg = '📋 **CODZIENNE PODSUMOWANIE RYNKU KRYPTO (GBP)**\n\n' + ''.join(digest_lines) + "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
+                    await asyncio.gather(
+                        send_telegram_alert_async(http_client, digest_msg),
+                        add_to_tasks_async(tasks_service, f"Podsumowanie Krypto ({today_str})", digest_msg.replace('**', '').replace('`', ''))
+                    )
+                    cache['DIGEST_DATE'] = today_str
 
             save_cache(cache)
 
