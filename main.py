@@ -32,6 +32,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_TASKS_CREDENTIALS = os.getenv("GOOGLE_TASKS_CREDENTIALS")
 
+# BEZPIECZNE WYMUSZENIE DOMYŚLNEJ LISTY GOOGLE TASKS (ELIMINACJA BŁĘDU 400)
 GOOGLE_TASK_LIST_ID = os.getenv("GOOGLE_TASK_LIST_ID") or "@default"
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XoG-AYYK06BNDmRYrtBvR2MdLKIcH638JnjYKnuV3pk")
 
@@ -146,11 +147,11 @@ async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache:
                 chat_id = msg_obj.get("chat", {}).get("id")
 
                 if text.startswith(("/status", "/stan", "/start")):
-                    status_msg = "📋 **AKTUALNY STAN RYNKU KRYPTO (GBP)**\n\n"
+                    status_msg = "📋 **AKTUALNY STAN RYNKU (KRYPTO)**\n\n"
                     for r in digest_rows:
-                        symbol = r['symbol']
-                        tv_ticker = symbol.replace("/GBP", "GBP")
-                        sym_link = f"[{symbol}](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_ticker})"
+                        sym = r['symbol']
+                        tv_ticker = sym.replace("/", "")
+                        sym_link = f"[{sym}](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_ticker})"
                         status_msg += f"🪙 {sym_link}: {r['price']} | RSI: {r['rsi']} | {r['pinbar']} | {r['status']}\n"
                     status_msg += "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
                     target_chat = chat_id or TELEGRAM_CHAT_ID
@@ -231,7 +232,21 @@ def compute_indicators(df_1d: pd.DataFrame, df_4h: pd.DataFrame) -> Tuple[pd.Dat
     return df_1d, df_4h
 
 
-# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH ---
+# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH + AUTOMATYCZNY FALLBACK DLA /USD ---
+async def get_valid_symbol(exchange: ccxt.Exchange, symbol: str) -> str:
+    """Sprawdza czy para /GBP istnieje na Krakenie. Jeśli nie, automatycznie przełącza na /USD."""
+    if not exchange.markets:
+        await exchange.load_markets()
+    
+    if symbol in exchange.markets:
+        return symbol
+    
+    usd_symbol = symbol.replace("/GBP", "/USD")
+    if usd_symbol in exchange.markets:
+        return usd_symbol
+    
+    return symbol
+
 async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 250, retries: int = 3, delay: float = 0.5) -> List[Any]:
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
@@ -242,17 +257,18 @@ async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timefram
                     raise e
                 await asyncio.sleep(delay)
 
-async def fetch_symbol_data(exchange: ccxt.Exchange, symbol: str) -> Tuple[str, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+async def fetch_symbol_data(exchange: ccxt.Exchange, symbol: str) -> Tuple[str, str, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     try:
+        active_symbol = await get_valid_symbol(exchange, symbol)
         res_1d, res_4h = await asyncio.gather(
-            fetch_ohlcv_retry_async(exchange, symbol, "1d", 250),
-            fetch_ohlcv_retry_async(exchange, symbol, "4h", 300)
+            fetch_ohlcv_retry_async(exchange, active_symbol, "1d", 250),
+            fetch_ohlcv_retry_async(exchange, active_symbol, "4h", 300)
         )
         cols = ['ts', 'o', 'h', 'l', 'close', 'v']
-        return symbol, pd.DataFrame(res_1d, columns=cols), pd.DataFrame(res_4h, columns=cols)
+        return symbol, active_symbol, pd.DataFrame(res_1d, columns=cols), pd.DataFrame(res_4h, columns=cols)
     except Exception as e:
         logging.error(f"Błąd pobierania danych dla {symbol}: {e}")
-        return symbol, None, None
+        return symbol, symbol, None, None
 
 
 # --- 6. GŁÓWNA PĘTLA ---
@@ -272,6 +288,7 @@ async def main() -> None:
 
     async with httpx.AsyncClient() as http_client:
         try:
+            await exchange.load_markets()
             results = await asyncio.gather(*[fetch_symbol_data(exchange, sym) for sym in SYMBOLS])
 
             digest_lines = []
@@ -279,11 +296,13 @@ async def main() -> None:
             pending_alerts = []
             rows_to_append_sheets = []
 
-            for symbol, df_1d, df_4h in results:
+            for original_symbol, active_symbol, df_1d, df_4h in results:
                 if df_1d is None or len(df_1d) < 30 or len(df_4h) < 100:
                     continue
 
-                is_core = symbol in CORE_CRYPTO
+                is_core = original_symbol in CORE_CRYPTO
+                symbol_currency = "£" if active_symbol.endswith("/GBP") else "$"
+
                 df_1d, df_4h = await asyncio.to_thread(compute_indicators, df_1d, df_4h)
 
                 is_uptrend_1d = df_1d['close'].iloc[-1] > df_1d['EMA_200'].iloc[-1]
@@ -302,11 +321,10 @@ async def main() -> None:
                 bbw_ma = df_4h['BBW_MA'].iloc[-2]
                 is_high_volatility = bbw_curr > bbw_ma
 
-                # Jeśli rynek jest w wąskiej konsolidacji (Squeeze), wymagamy głębszego RSI
                 base_thr = 36.0 if is_core else 28.0
                 buy_threshold = base_thr if is_high_volatility else (base_thr - 3.0)
 
-                display_price = f"£{close_closed:.4f}" if close_closed < 1 else f"£{close_closed:.2f}"
+                display_price = f"{symbol_currency}{close_closed:.4f}" if close_closed < 1 else f"{symbol_currency}{close_closed:.2f}"
 
                 current_signal_type = "NONE"
                 if is_uptrend_1d and is_uptrend_4h and rsi_4h_closed <= buy_threshold:
@@ -323,20 +341,19 @@ async def main() -> None:
                 trend_txt = "↗️ Wzrostowy" if is_uptrend_1d else "↘️ Spadkowy"
                 pinbar_txt = "🕯️ Pinbar 4H" if has_pinbar else "Brak"
 
-                # Odnośnik do analizy graficznej TradingView
-                tv_ticker = symbol.replace("/GBP", "GBP")
+                tv_ticker = active_symbol.replace("/", "")
                 tv_link = f"[📈 Zobacz wykres na TradingView](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_ticker})"
                 t212_link = "[💼 Handluj na Trading 212](https://live.trading212.com/)"
 
-                sym_link = f"[{symbol}](https://live.trading212.com/)"
+                sym_link = f"[{active_symbol}](https://live.trading212.com/)"
                 digest_lines.append(f"🪙 {sym_link}: {display_price} | RSI: {rsi_4h_closed} | {pinbar_txt} | {status_txt}\n")
                 digest_summary_rows.append({
-                    'symbol': symbol, 'price': display_price,
+                    'symbol': active_symbol, 'price': display_price,
                     'rsi': rsi_4h_closed, 'pinbar': pinbar_txt,
                     'trend': trend_txt, 'status': status_txt
                 })
 
-                symbol_cache = cache.get(symbol, {})
+                symbol_cache = cache.get(original_symbol, {})
                 last_ts = symbol_cache.get("ts", 0)
                 last_signal = symbol_cache.get("signal", "NONE")
                 last_alert_time = symbol_cache.get("last_alert_time", 0.0)
@@ -368,10 +385,10 @@ async def main() -> None:
                     conf_msg = ("\n**Potwierdzenia techniczne:**\n" + "\n".join(confirmations)) if confirmations else ""
 
                     if current_signal_type == "BUY_TREND":
-                        task_title = f"TREND KUPNO: {symbol}"
+                        task_title = f"TREND KUPNO: {active_symbol}"
                         msg = (
                             f"🟢 **STABILNE KUPNO W TRENDZIE WZROSTOWYM**\n\n"
-                            f"🪙 **Moneta:** `{symbol}` | **Cena:** `{display_price}`\n"
+                            f"🪙 **Moneta:** `{active_symbol}` | **Cena:** `{display_price}`\n"
                             f"📊 **RSI 4H:** `{rsi_4h_closed}`\n"
                             f"📈 **Trend 1D:** `Wzrostowy 🟢`\n"
                             f"{conf_msg}\n\n"
@@ -379,10 +396,10 @@ async def main() -> None:
                             f"🔗 {tv_link}\n🔗 {t212_link}"
                         )
                     else:
-                        task_title = f"⚡️ SZYBKIE ODBICIE: {symbol}"
+                        task_title = f"⚡️ SZYBKIE ODBICIE: {active_symbol}"
                         msg = (
                             f"⚡️ **SZYBKA OKAZJA NA ODBICIE (SWING)**\n\n"
-                            f"🪙 **Moneta:** `{symbol}` | **Cena:** `{display_price}`\n"
+                            f"🪙 **Moneta:** `{active_symbol}` | **Cena:** `{display_price}`\n"
                             f"📊 **RSI 4H:** `{rsi_4h_closed}`\n"
                             f"📈 **Trend 1D:** `{'Wzrostowy 🟢' if is_uptrend_1d else 'Spadkowy/Korekta 🟡'}`\n"
                             f"{conf_msg}\n\n"
@@ -391,11 +408,11 @@ async def main() -> None:
                         )
 
                     pending_alerts.append((
-                        task_title, msg, symbol, status_txt,
-                        {'symbol': symbol, 'status': status_txt, 'price': display_price, 'rsi_4h': rsi_4h_closed}
+                        task_title, msg, active_symbol, status_txt,
+                        {'symbol': active_symbol, 'status': status_txt, 'price': display_price, 'rsi_4h': rsi_4h_closed}
                     ))
 
-                cache[symbol] = {
+                cache[original_symbol] = {
                     "ts": ts_closed, 
                     "signal": signal_to_save,
                     "last_alert_time": current_epoch if should_alert else last_alert_time,
@@ -422,16 +439,6 @@ async def main() -> None:
                     await asyncio.to_thread(sheet.append_rows, rows_to_append_sheets)
                 except Exception as e:
                     logging.error(f"Błąd Google Sheets: {e}")
-
-            # CODZIENNE PODSUMOWANIE O GODZINIE 21:00+
-            if uk_now.hour >= 21 and cache.get('DIGEST_DATE') != today_str:
-                if digest_lines:
-                    digest_msg = '📋 **CODZIENNE PODSUMOWANIE RYNKU KRYPTO (GBP)**\n\n' + ''.join(digest_lines) + "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
-                    await asyncio.gather(
-                        send_telegram_alert_async(http_client, digest_msg),
-                        add_to_tasks_async(tasks_service, f"Podsumowanie Krypto ({today_str})", digest_msg.replace('**', '').replace('`', ''))
-                    )
-                    cache['DIGEST_DATE'] = today_str
 
             save_cache(cache)
 
