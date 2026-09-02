@@ -200,6 +200,9 @@ def calculate_indicators(df, min_wick_ratio=0.65, max_upper_wick_ratio=0.20):
     df['std20'] = df['close'].rolling(window=20).std()
     df['bb_upper'] = df['sma20'] + (df['std20'] * 2)
     df['bb_lower'] = df['sma20'] - (df['std20'] * 2)
+
+    # Średnia wolumenu (SMA 20)
+    df['vol_sma20'] = df['volume'].rolling(window=20).mean()
     
     # Detekcja Pin Bara
     range_candle = df['high'] - df['low']
@@ -259,10 +262,17 @@ async def main():
                 is_pinbar = bool(last_row['pinbar'])
                 ts_closed = int(last_row['timestamp'] / 1000)
 
-                # Prawidłowa nazwa symbolu na TradingView (Kraken)
+                # Analiza wolumenu na zamkniętej świecy
+                vol_target = last_row['volume']
+                vol_sma = last_row['vol_sma20']
+                volume_str = "Standardowy"
+                if pd.notna(vol_sma) and vol_sma > 0:
+                    vol_ratio = int((vol_target / vol_sma) * 100)
+                    volume_str = f"{vol_ratio}% średniej {'🟢 (Wysoki)' if vol_ratio >= 120 else ('🔴 (Niski)' if vol_ratio <= 80 else '🟡 (Standard)')}"
+
                 tv_clean_symbol = symbol.replace("/", "")
 
-                # Standaryzacja waluty do GBP pod Trading 212
+                # Standaryzacja waluty i precyzyjne formatowanie kwot
                 if 'USD' in symbol:
                     price_gbp = price_native * usd_to_gbp
                     symbol_display = symbol.replace('USD', 'GBP')
@@ -270,7 +280,7 @@ async def main():
                     price_gbp = price_native
                     symbol_display = symbol
 
-                price_disp = f"£{price_gbp:.4f}"
+                price_disp = f"£{price_gbp:.2f}" if price_gbp >= 1.0 else f"£{price_gbp:.4f}"
 
                 # Kryteria wyzwolenia sygnału
                 current_signal_type = 'NONE'
@@ -319,18 +329,24 @@ async def main():
                     tv_link = f"https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_clean_symbol}"
                     t212_link = "https://live.trading212.com/"
 
-                    pinbar_line = f"🕯 **Knot popytowy na świecy 4H (Pinbar >= {int(pinbar_threshold * 100)}%)**\n" if is_pinbar else ""
+                    confirmations = []
+                    if is_pinbar:
+                        confirmations.append(f"🕯️ **Knot popytowy na świecy 4H (Pinbar >= {int(pinbar_threshold * 100)}%)**")
+                    if last_row['low'] <= last_row['bb_lower']:
+                        confirmations.append("📉 **Test dolnej Wstęgi Bollingera (20, 2)**")
+                    confirmations.append(f"📊 **Wolumen:** {volume_str}")
 
-                    title = f"⚡️ ODBICIE KRYPTO: {symbol_display}"
+                    conf_msg = "\n" + "\n".join(confirmations)
+
+                    title = f"⚡️ SZYBKIE ODBICIE: {symbol_display}"
                     body = (
                         f"⚡️ **SZYBKA OKAZJA NA ODBICIE (SWING)**\n\n"
                         f"{crypto_icon} **Moneta:** [{symbol_display}]({tv_link})\n"
                         f"💰 **Cena:** `{price_disp}`\n"
-                        f"📊 **RSI 4H:** `{rsi_4h}`\n\n"
-                        f"Potwierdzenia techniczne:\n"
-                        f"{pinbar_line}"
-                        f"🔗 [Zobacz wykres na TradingView]({tv_link})\n"
-                        f"🔗 [Handluj na Trading 212]({t212_link})"
+                        f"📊 **RSI 4H:** `{rsi_4h}`{conf_msg}\n\n"
+                        f"👁 **Oceń wykres i dołek knota:**\n"
+                        f"🔗 📈 [Zobacz wykres na TradingView]({tv_link})\n"
+                        f"🔗 💼 [Handluj na Trading 212]({t212_link})"
                     )
 
                     pending_alerts.append((title, body, symbol_display, status_txt, price_disp, rsi_4h))
