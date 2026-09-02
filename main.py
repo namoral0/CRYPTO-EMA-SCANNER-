@@ -76,7 +76,6 @@ def load_cache():
     return {}
 
 def save_cache(cache_data):
-    """Zapis atomowy zapobiegający uszkodzeniu pliku JSON przy przerwaniu skryptu."""
     try:
         dir_name = os.path.dirname(os.path.abspath(CACHE_FILE)) or "."
         with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as tf:
@@ -99,7 +98,6 @@ async def send_telegram_alert_async(http_client: httpx.AsyncClient, msg: str, cu
         logging.error(f"Nie udało się wysłać wiadomości na Telegram: {e}")
 
 async def add_to_tasks_async(tasks_service, title, notes, retries=3):
-    """Dodaje zadanie do Google Tasks z automatycznym ponawianiem w przypadku błędu SSL/sieci."""
     if not tasks_service:
         return
     async with GOOGLE_SEMAPHORE:
@@ -158,7 +156,6 @@ async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache:
                         tv_sym = r.get('tv_symbol', sym_disp.replace("/", ""))
                         tv_link = f"[{sym_disp}](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_sym})"
                         status_msg += f"{r['icon']} {tv_link}: {r['price']} | RSI: {r['rsi']} | {r['pinbar']} | {r['status']}\n"
-                    status_msg += "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
                     target_chat = chat_id or TELEGRAM_CHAT_ID
                     if target_chat:
                         await send_telegram_alert_async(http_client, status_msg, custom_chat_id=target_chat)
@@ -184,7 +181,6 @@ async def get_gbp_rate_async():
         return 0.79
 
 def calculate_indicators(df, min_wick_ratio=0.65, max_upper_wick_ratio=0.20):
-    # RSI 14 (Wygładzanie wykładnicze Wildera)
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -195,16 +191,13 @@ def calculate_indicators(df, min_wick_ratio=0.65, max_upper_wick_ratio=0.20):
     rs = avg_gain / avg_loss
     df['rsi'] = round(100 - (100 / (1 + rs)), 2)
     
-    # Wstęgi Bollingera (20, 2)
     df['sma20'] = df['close'].rolling(window=20).mean()
     df['std20'] = df['close'].rolling(window=20).std()
     df['bb_upper'] = df['sma20'] + (df['std20'] * 2)
     df['bb_lower'] = df['sma20'] - (df['std20'] * 2)
 
-    # Średnia wolumenu (SMA 20)
     df['vol_sma20'] = df['volume'].rolling(window=20).mean()
     
-    # Detekcja Pin Bara
     range_candle = df['high'] - df['low']
     body = abs(df['close'] - df['open'])
     
@@ -255,14 +248,12 @@ async def main():
 
                 df = calculate_indicators(df, min_wick_ratio=pinbar_threshold, max_upper_wick_ratio=0.20)
 
-                # Zamknięta świeca 4H (iloc[-2])
                 last_row = df.iloc[-2]
                 price_native = float(last_row['close'])
                 rsi_4h = float(last_row['rsi'])
                 is_pinbar = bool(last_row['pinbar'])
                 ts_closed = int(last_row['timestamp'] / 1000)
 
-                # Analiza wolumenu na zamkniętej świecy
                 vol_target = last_row['volume']
                 vol_sma = last_row['vol_sma20']
                 volume_str = "Standardowy"
@@ -272,7 +263,6 @@ async def main():
 
                 tv_clean_symbol = symbol.replace("/", "")
 
-                # Standaryzacja waluty i precyzyjne formatowanie kwot
                 if 'USD' in symbol:
                     price_gbp = price_native * usd_to_gbp
                     symbol_display = symbol.replace('USD', 'GBP')
@@ -282,7 +272,6 @@ async def main():
 
                 price_disp = f"£{price_gbp:.2f}" if price_gbp >= 1.0 else f"£{price_gbp:.4f}"
 
-                # Kryteria wyzwolenia sygnału
                 current_signal_type = 'NONE'
                 if (rsi_4h <= rsi_signal_threshold) or (last_row['low'] <= last_row['bb_lower']):
                     current_signal_type = 'BUY_REBOUND'
@@ -306,7 +295,6 @@ async def main():
                     'status': status_txt, 'tv_symbol': tv_clean_symbol
                 })
 
-                # LOGIKA CACHE — ANTY-SPAM CO 15 MINUT
                 ticker_cache = cache.get(symbol_display, {})
                 last_sig = ticker_cache.get('signal', 'NONE')
                 last_ts = ticker_cache.get('ts_closed', 0)
@@ -326,8 +314,7 @@ async def main():
                 signal_to_save = current_signal_type if current_signal_type != 'NONE' else (last_sig if last_ts == ts_closed else 'NONE')
 
                 if should_alert:
-                    tv_link = f"https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_clean_symbol}"
-                    t212_link = "https://live.trading212.com/"
+                    tv_link = f"[📈 Zobacz wykres na TradingView](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_clean_symbol})"
 
                     confirmations = []
                     if is_pinbar:
@@ -341,12 +328,11 @@ async def main():
                     title = f"⚡️ SZYBKIE ODBICIE: {symbol_display}"
                     body = (
                         f"⚡️ **SZYBKA OKAZJA NA ODBICIE (SWING)**\n\n"
-                        f"{crypto_icon} **Moneta:** [{symbol_display}]({tv_link})\n"
+                        f"{crypto_icon} **Moneta:** [{symbol_display}](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_clean_symbol})\n"
                         f"💰 **Cena:** `{price_disp}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h}`{conf_msg}\n\n"
                         f"👁 **Oceń wykres i dołek knota:**\n"
-                        f"🔗 📈 [Zobacz wykres na TradingView]({tv_link})\n"
-                        f"🔗 💼 [Handluj na Trading 212]({t212_link})"
+                        f"🔗 {tv_link}"
                     )
 
                     pending_alerts.append((title, body, symbol_display, status_txt, price_disp, rsi_4h))
@@ -370,7 +356,6 @@ async def main():
         write_github_step_summary(digest_summary_rows, health_msg=health_summary)
         await process_telegram_commands_async(http_client, cache, digest_summary_rows)
 
-        # Wysyłanie powiadomień i zapis zbiorczy
         if pending_alerts:
             alert_coroutines = []
             for task_title, msg, sym_disp, status_txt, price_disp, rsi_val in pending_alerts:
@@ -393,10 +378,9 @@ async def main():
             except Exception as e:
                 logging.error(f"Nie udało się zapisać wierszy w Google Sheets: {e}")
 
-        # CODZIENNE PODSUMOWANIE RYNKU KRYPTO O GODZINIE 21:00
         if uk_now.hour >= 21 and cache.get('DIGEST_DATE') != today_str:
             if digest_lines:
-                digest_msg = '📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO - 21:00)**\n\n' + ''.join(digest_lines) + "\n📎 💼 [Handluj na Trading 212](https://live.trading212.com/)"
+                digest_msg = '📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO - 21:00)**\n\n' + ''.join(digest_lines)
                 await asyncio.gather(
                     send_telegram_alert_async(http_client, digest_msg),
                     add_to_tasks_async(tasks_service, f"Podsumowanie Krypto ({today_str})", digest_msg.replace('**', '').replace('`', ''))
