@@ -45,7 +45,8 @@ SYMBOLS = [
 ]
 CACHE_FILE = "cache_krypto.json"
 
-KRAKEN_SEMAPHORE = asyncio.Semaphore(3)
+# Optymalizacja szybkości zapytań
+KRAKEN_SEMAPHORE = asyncio.Semaphore(5)
 GOOGLE_SEMAPHORE = asyncio.Semaphore(2)
 
 SIGNAL_COOLDOWN_SECONDS = 86400
@@ -261,8 +262,8 @@ def compute_indicators(df_1d: pd.DataFrame, df_4h: pd.DataFrame, df_15m: pd.Data
     return df_1d, df_4h, df_15m
 
 
-# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH ---
-async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 250, retries: int = 3, delay: float = 2.0) -> List[Any]:
+# --- 5. ASYNCHRONICZNE POBIERANIE DANYCH (ZOPTAMALIZOWANE SZYBKOŚCIOWO) ---
+async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: int = 250, retries: int = 3, delay: float = 0.5) -> List[Any]:
     async with KRAKEN_SEMAPHORE:
         for attempt in range(retries):
             try:
@@ -271,8 +272,7 @@ async def fetch_ohlcv_retry_async(exchange: ccxt.Exchange, symbol: str, timefram
                 if attempt == retries - 1:
                     logging.error(f"Wypróbowano {retries} prób dla {symbol} ({timeframe}). Ostatni błąd: {e}")
                     raise e
-                sleep_time = delay * (2 ** attempt)
-                logging.warning(f"Timeout z Krakena dla {symbol} [{timeframe}] (Próba {attempt + 1}/{retries}). Odczekanie {sleep_time}s...")
+                sleep_time = delay * (1.5 ** attempt)
                 await asyncio.sleep(sleep_time)
             except Exception as e:
                 if attempt == retries - 1:
@@ -417,7 +417,7 @@ async def main() -> None:
 
                 current_epoch = time.time()
 
-                # --- KONTROLA DUPLIKATÓW PRZEZ SPRAWDZENIE ZMIANY RSI ORAZ CENY ---
+                # Kontrola duplikatów
                 rsi_changed = abs(rsi_4h_closed - last_sent_rsi) >= 0.5
                 price_changed = abs(close_closed - last_sent_price) > (0.001 * close_closed if last_sent_price > 0 else 0.0)
 
