@@ -8,28 +8,28 @@
   "BTC/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 1788377458.7017376,
     "last_sent_rsi": 43.25
   },
   "ETH/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 1788352284.9935334,
     "last_sent_rsi": 34.7
   },
   "SOL/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 1788377461.073344,
     "last_sent_rsi": 39.8
   },
   "XRP/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 1788377465.9220457,
     "last_sent_rsi": 37.15
   },
@@ -41,21 +41,21 @@
   "SUI/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 1788355886.5282588,
     "last_sent_rsi": 39.6
   },
   "LINK/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 1788206940.8249316,
     "last_sent_rsi": 0.0
   },
   "AAVE/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 0.0,
     "last_sent_rsi": 0.0
   },
@@ -80,21 +80,21 @@
   "TAO/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 1788379277.0258274,
     "last_sent_rsi": 29.45
   },
   "RENDER/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 0.0,
     "last_sent_rsi": 0.0
   },
   "ONDO/GBP": {
     "signal": "NONE",
     "date": "2026-09-03",
-    "ts_closed": 1788393600,
+    "ts_closed": 1788408000,
     "last_alert_time": 1788364914.8438325,
     "last_sent_rsi": 37.3
   }
