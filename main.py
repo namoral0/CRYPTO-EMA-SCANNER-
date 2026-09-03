@@ -12,7 +12,6 @@ import gspread
 import httpx
 import pandas as pd
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
 
 # --- 1. KONFIGURACJA LOGOWANIA ---
 logging.basicConfig(
@@ -25,8 +24,7 @@ logging.basicConfig(
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
-GOOGLE_TASKS_CREDENTIALS = os.getenv('GOOGLE_TASKS_CREDENTIALS')
-GOOGLE_TASK_LIST_ID = os.getenv('GOOGLE_TASK_LIST_ID') or '@default'
+GOOGLE_CREDENTIALS = os.getenv('GOOGLE_CREDENTIALS') or os.getenv('GOOGLE_TASKS_CREDENTIALS')
 
 CORE_CRYPTO = ['BTC/GBP', 'ETH/GBP']
 ALT_CRYPTO = [
@@ -37,8 +35,6 @@ ALT_CRYPTO = [
 SYMBOLS = CORE_CRYPTO + ALT_CRYPTO
 CACHE_FILE = 'cache_krypto.json'
 
-GOOGLE_SEMAPHORE = asyncio.Semaphore(2)
-
 exchange = ccxt.kraken({
     'enableRateLimit': True,
     'options': {'defaultType': 'spot'}
@@ -46,25 +42,18 @@ exchange = ccxt.kraken({
 
 
 # --- 3. INICJALIZACJA USŁUG I I/O ---
-def init_google_services():
-    if not GOOGLE_TASKS_CREDENTIALS:
-        return None, None
+def init_google_sheet():
+    if not GOOGLE_CREDENTIALS or not SPREADSHEET_ID:
+        return None
     try:
-        creds_dict = json.loads(GOOGLE_TASKS_CREDENTIALS)
-        scopes = [
-            "https://www.googleapis.com/auth/tasks",
-            "https://www.googleapis.com/auth/spreadsheets"
-        ]
+        creds_dict = json.loads(GOOGLE_CREDENTIALS)
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        
-        tasks_service = build('tasks', 'v1', credentials=creds, cache_discovery=False)
         sheet_client = gspread.authorize(creds)
-        sheet = sheet_client.open_by_key(SPREADSHEET_ID).sheet1 if SPREADSHEET_ID else None
-        
-        return tasks_service, sheet
+        return sheet_client.open_by_key(SPREADSHEET_ID).sheet1
     except Exception as e:
-        logging.error(f"Błąd inicjalizacji Google Services: {e}")
-        return None, None
+        logging.error(f"Błąd inicjalizacji Google Sheets: {e}")
+        return None
 
 def load_cache():
     if os.path.exists(CACHE_FILE):
@@ -96,27 +85,6 @@ async def send_telegram_alert_async(http_client: httpx.AsyncClient, msg: str, cu
         response.raise_for_status()
     except Exception as e:
         logging.error(f"Nie udało się wysłać wiadomości na Telegram: {e}")
-
-async def add_to_tasks_async(tasks_service, title, notes, retries=3):
-    if not tasks_service:
-        return
-    async with GOOGLE_SEMAPHORE:
-        for attempt in range(retries):
-            try:
-                await asyncio.to_thread(
-                    lambda: tasks_service.tasks().insert(
-                        tasklist=GOOGLE_TASK_LIST_ID, 
-                        body={'title': title, 'notes': notes}
-                    ).execute()
-                )
-                logging.info(f"Dodano zadanie do Google Tasks: {title}")
-                return
-            except Exception as e:
-                if attempt < retries - 1:
-                    logging.warning(f"Próba {attempt + 1}/{retries} Google Tasks nie powiodła się ({e}). Ponawiam za 1.0s...")
-                    await asyncio.sleep(1.0)
-                else:
-                    logging.error(f"Błąd Google Tasks po {retries} próbach: {e}")
 
 def write_github_step_summary(digest_rows, health_msg=""):
     summary_file = os.getenv("GITHUB_STEP_SUMMARY")
@@ -222,7 +190,7 @@ async def main():
     today_str = uk_now.strftime('%Y-%m-%d')
     now_str = uk_now.strftime('%Y-%m-%d %H:%M')
 
-    tasks_service, sheet = init_google_services()
+    sheet = init_google_sheet()
     cache = load_cache()
     usd_to_gbp = await get_gbp_rate_async()
 
@@ -314,7 +282,7 @@ async def main():
                 signal_to_save = current_signal_type if current_signal_type != 'NONE' else (last_sig if last_ts == ts_closed else 'NONE')
 
                 if should_alert:
-                    tv_link = f"[📈 Zobacz wykres na TradingView](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_clean_symbol})"
+                    tv_link = f"https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_clean_symbol}"
 
                     confirmations = []
                     if is_pinbar:
@@ -325,17 +293,16 @@ async def main():
 
                     conf_msg = "\n" + "\n".join(confirmations)
 
-                    title = f"⚡️ SZYBKIE ODBICIE: {symbol_display}"
                     body = (
                         f"⚡️ **SZYBKA OKAZJA NA ODBICIE (SWING)**\n\n"
-                        f"{crypto_icon} **Moneta:** [{symbol_display}](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_clean_symbol})\n"
+                        f"{crypto_icon} **Moneta:** [{symbol_display}]({tv_link})\n"
                         f"💰 **Cena:** `{price_disp}`\n"
                         f"📊 **RSI 4H:** `{rsi_4h}`{conf_msg}\n\n"
                         f"👁 **Oceń wykres i dołek knota:**\n"
-                        f"🔗 {tv_link}"
+                        f"🔗 📈 [Zobacz wykres na TradingView]({tv_link})"
                     )
 
-                    pending_alerts.append((title, body, symbol_display, status_txt, price_disp, rsi_4h))
+                    pending_alerts.append((body, symbol_display, status_txt, price_disp, rsi_4h))
 
                 cache[symbol_display] = {
                     'signal': signal_to_save,
@@ -358,10 +325,8 @@ async def main():
 
         if pending_alerts:
             alert_coroutines = []
-            for task_title, msg, sym_disp, status_txt, price_disp, rsi_val in pending_alerts:
+            for msg, sym_disp, status_txt, price_disp, rsi_val in pending_alerts:
                 alert_coroutines.append(send_telegram_alert_async(http_client, msg))
-                alert_coroutines.append(add_to_tasks_async(tasks_service, task_title, msg.replace('**', '')))
-                
                 rows_to_append_sheets.append([
                     now_str,
                     sym_disp,
@@ -381,10 +346,7 @@ async def main():
         if uk_now.hour >= 21 and cache.get('DIGEST_DATE') != today_str:
             if digest_lines:
                 digest_msg = '📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO - 21:00)**\n\n' + ''.join(digest_lines)
-                await asyncio.gather(
-                    send_telegram_alert_async(http_client, digest_msg),
-                    add_to_tasks_async(tasks_service, f"Podsumowanie Krypto ({today_str})", digest_msg.replace('**', '').replace('`', ''))
-                )
+                await send_telegram_alert_async(http_client, digest_msg)
                 cache['DIGEST_DATE'] = today_str
 
         save_cache(cache)
