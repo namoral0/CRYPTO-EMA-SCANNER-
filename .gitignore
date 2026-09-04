@@ -1,0 +1,8 @@
+# Zmienne środowiskowe i klucze
+.env
+*.json
+
+# Cache Pythona i lokalne bazy
+__pycache__/
+*.pyc
+.DS_Store
