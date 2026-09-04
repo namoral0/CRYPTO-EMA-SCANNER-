@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import asyncio
 import datetime
 import json
@@ -123,7 +124,7 @@ async def process_telegram_commands_async(http_client: httpx.AsyncClient, cache:
                         sym_disp = r['symbol']
                         tv_sym = r.get('tv_symbol', sym_disp.replace("/", ""))
                         tv_link = f"[{sym_disp}](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_sym})"
-                        status_msg += f"{r['icon']} {tv_link}: {r['price']} | RSI: {r['rsi']} | {r['pinbar']} | {r['status']}\n"
+                        status_msg += f"{r['icon']} {tv_link}: {r['price']}\n├ RSI (4H): {r['rsi']} | {r['pinbar']}\n└ Stan: {r['status']}\n\n"
                     target_chat = chat_id or TELEGRAM_CHAT_ID
                     if target_chat:
                         await send_telegram_alert_async(http_client, status_msg, custom_chat_id=target_chat)
@@ -252,11 +253,15 @@ async def main():
                     'BUY_PINBAR': '🕯️ PINBAR ODBICIE'
                 }
                 status_txt = status_map.get(current_signal_type, '⚪ Neutralny')
-                pinbar_txt = f"🕯️ Pinbar {int(pinbar_threshold * 100)}%" if is_pinbar else "Brak"
+                pinbar_txt = f"Pinbar {int(pinbar_threshold * 100)}%" if is_pinbar else "Brak"
 
                 tv_link_symbol = f"[{symbol_display}](https://www.tradingview.com/chart/?symbol=KRAKEN:{tv_clean_symbol})"
 
-                digest_lines.append(f"{crypto_icon} {tv_link_symbol}: {price_disp} | RSI: {rsi_4h} | {pinbar_txt} | {status_txt}\n")
+                digest_lines.append(
+                    f"{crypto_icon} {tv_link_symbol}: `{price_disp}`\n"
+                    f"├ RSI (4H): `{rsi_4h}` | {pinbar_txt}\n"
+                    f"└ Stan: {status_txt}\n\n"
+                )
                 digest_summary_rows.append({
                     'symbol': symbol_display, 'icon': crypto_icon,
                     'price': price_disp, 'rsi': rsi_4h, 'pinbar': pinbar_txt,
@@ -297,7 +302,7 @@ async def main():
                         f"⚡️ **SZYBKA OKAZJA NA ODBICIE (SWING)**\n\n"
                         f"{crypto_icon} **Moneta:** [{symbol_display}]({tv_link})\n"
                         f"💰 **Cena:** `{price_disp}`\n"
-                        f"📊 **RSI 4H:** `{rsi_4h}`{conf_msg}\n\n"
+                        f"📊 **RSI (4H):** `{rsi_4h}`{conf_msg}\n\n"
                         f"👁 **Oceń wykres i dołek knota:**\n"
                         f"🔗 📈 [Zobacz wykres na TradingView]({tv_link})"
                     )
@@ -343,7 +348,8 @@ async def main():
             except Exception as e:
                 logging.error(f"Nie udało się zapisać wierszy w Google Sheets: {e}")
 
-        if uk_now.hour >= 21 and cache.get('DIGEST_DATE') != today_str:
+        # PRZYCZYNA SPAMU NAPRAWIONA: Wykonuje się wyłącznie raz dziennie podczas uruchomienia o godzinie 21:00
+        if uk_now.hour == 21 and uk_now.minute < 15:
             if digest_lines:
                 digest_msg = '📋 **CODZIENNE PODSUMOWANIE RYNKU (KRYPTO - 21:00)**\n\n' + ''.join(digest_lines)
                 await send_telegram_alert_async(http_client, digest_msg)
